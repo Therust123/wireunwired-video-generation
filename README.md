@@ -6,7 +6,7 @@ A phone-friendly progressive web app that turns a WireUnWired AI Generator scrip
 
 - Paste the expected WireUnWired JSON (`title`, `category`, `music_mood`, `scenes[]`) or paste a plain-text script with scene paragraphs separated by blank lines.
 - Review scene headlines, body copy, scene durations, and audio cues before rendering.
-- Generate animated 9:16 motion-graphic scenes, optional thumbnail imagery when a CORS-accessible image URL is provided, procedural background music, and scene-specific sound effects.
+- Generate animated 9:16 motion-graphic scenes, a typewriter-style headline/body reveal with a blinking cursor, a segmented slide-progress indicator, optional thumbnail imagery when a CORS-accessible image URL is provided, and a louder compressed audio mix with scene-specific sound effects.
 - Record a local video with browser MediaRecorder; save or share the file from a compatible mobile browser.
 - Install as a PWA on Android or iOS after hosting over HTTPS. App shell can be cached for offline access after first load.
 
@@ -16,7 +16,7 @@ A phone-friendly progressive web app that turns a WireUnWired AI Generator scrip
 - Current export is the browser's supported recording format: normally WebM in Chromium; some Safari versions may export MP4. Playback and editing support vary by platform.
 - The initial visual system uses branded motion graphics. It does not invent photorealistic images; it will use an explicitly supplied, CORS-accessible thumbnail if available.
 - Keep the app in the foreground during rendering. Short videos (roughly 20–40 seconds) are the best mobile starting point. The app currently caps total duration at 90 seconds.
-- Generated audio is procedural synthesized music/effects; it is not a human-composed soundtrack.
+- Generated audio is procedural synthesized music/effects; it is not a human-composed soundtrack. The mix is boosted and dynamically compressed for better phone-speaker audibility, but device volume and speaker quality still affect playback.
 - If a remote image doesn't allow cross-origin display, the scene automatically falls back to abstract motion graphics.
 
 ## Test locally on a computer
@@ -68,3 +68,11 @@ Supported sound cues: `impact`, `whoosh`, `pulse`, `riser`, `soft`. Supported mu
 - `app.js`: parsing, scene layout, Web Audio sound generation, canvas animation, recording and save/share
 - `manifest.webmanifest`, `sw.js`: PWA install metadata and offline app shell
 - `icons/`: app icons
+
+## Version 0.2 changes
+
+- Increased soundtrack and scene-effect levels; added dynamic compression to help avoid harsh peaks.
+- Added a low + mid-frequency impact so scene transitions are less likely to disappear on phone speakers.
+- Animated headline and body copy using a typewriter reveal and blinking cursor.
+- Replaced the continuous timeline with segmented scene progress and a persistent `SLIDE 01 OF 05`-style counter.
+- Bumped the service-worker cache name to `v2` so installed copies can pick up the updated files.

@@ -29,13 +29,14 @@
     business: { a: '#0a1515', b: '#19342f', accent: '#a7f1c7', secondary: '#58c6a1', tag: 'BUSINESS BRIEF', glow: 'rgba(89,215,171,.15)' },
     science: { a: '#0d1022', b: '#20264a', accent: '#c5b5ff', secondary: '#8375ff', tag: 'SCIENCE / FUTURE', glow: 'rgba(133,115,255,.17)' }
   };
+  // Increased local mix levels for phone speakers. The compressor below keeps peaks controlled.
   const MOODS = {
-    cinematic: { notes: [110, 146.83, 174.61], filter: 800, volume: .07, cue: .7 },
-    soft: { notes: [130.81, 164.81, 196], filter: 1100, volume: .042, cue: .48 },
-    tense: { notes: [103.83, 123.47, 155.56], filter: 600, volume: .058, cue: .8 },
-    futuristic: { notes: [116.54, 174.61, 233.08], filter: 1400, volume: .047, cue: .64 },
-    hopeful: { notes: [130.81, 164.81, 220], filter: 1600, volume: .05, cue: .52 },
-    none: { notes: [], filter: 1000, volume: 0, cue: .7 }
+    cinematic: { notes: [110, 146.83, 174.61], filter: 900, volume: .155, cue: .96 },
+    soft: { notes: [130.81, 164.81, 196], filter: 1150, volume: .105, cue: .82 },
+    tense: { notes: [103.83, 123.47, 155.56], filter: 720, volume: .145, cue: 1.0 },
+    futuristic: { notes: [116.54, 174.61, 233.08], filter: 1550, volume: .145, cue: .96 },
+    hopeful: { notes: [130.81, 164.81, 220], filter: 1700, volume: .125, cue: .88 },
+    none: { notes: [], filter: 1000, volume: 0, cue: .96 }
   };
   let prepared = null;
   let currentBlob = null;
@@ -178,7 +179,7 @@
       card.append(number, main, duration); els.sceneList.append(card);
     });
     const total = story.scenes.reduce((sum, s) => sum + s.duration, 0);
-    els.sceneCount.textContent = `${story.scenes.length} SCENES · ${Math.round(total)} SEC`;
+    els.sceneCount.textContent = `${story.scenes.length} SLIDES · ${Math.round(total)} SEC`;
     els.storyTitle.textContent = story.title;
     els.storyCategory.textContent = story.category;
   }
@@ -186,7 +187,7 @@
     const s = Math.max(0, Math.floor(seconds));
     return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   }
-  function wrapText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 5) {
+  function wrapText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 5, revealCount = Infinity, showCursor = false, cursorTime = 0) {
     const words = String(text || '').split(/\s+/).filter(Boolean); const lines = []; let line = '';
     for (const word of words) {
       const test = line ? `${line} ${word}` : word;
@@ -200,7 +201,23 @@
       while (ctx.measureText(`${last}…`).width > maxWidth && last.length > 4) last = last.slice(0, -1);
       clipped[clipped.length - 1] = `${last.trim()}…`;
     }
-    clipped.forEach((ln, i) => ctx.fillText(ln, x, y + i * lineHeight));
+    let remaining = Number.isFinite(revealCount) ? Math.max(0, Math.floor(revealCount)) : Infinity;
+    let lastVisible = null;
+    clipped.forEach((ln, i) => {
+      const shown = Number.isFinite(remaining) ? ln.slice(0, remaining) : ln;
+      if (Number.isFinite(remaining)) remaining = Math.max(0, remaining - shown.length);
+      if (shown.length) {
+        ctx.fillText(shown, x, y + i * lineHeight);
+        lastVisible = { text: shown, x, baseline: y + i * lineHeight };
+      }
+    });
+    if (showCursor && lastVisible && Math.floor(cursorTime * 3.2) % 2 === 0) {
+      const cursorX = x + ctx.measureText(lastVisible.text).width + 4;
+      const cursorTop = lastVisible.baseline - Math.min(38, lineHeight - 12) + 5;
+      roundedRect(ctx, cursorX, cursorTop, 3, Math.min(34, lineHeight - 14), 1.5, '#a4efff');
+    } else if (showCursor && !lastVisible && Math.floor(cursorTime * 3.2) % 2 === 0) {
+      roundedRect(ctx, x, y - Math.min(38, lineHeight - 12) + 5, 3, Math.min(34, lineHeight - 14), 1.5, '#a4efff');
+    }
     return clipped.length;
   }
   function roundedRect(ctx, x, y, w, h, r, fill, stroke) {
@@ -221,11 +238,20 @@
     // Large rings are a reusable abstract visual language for stories without images.
     ctx.save(); ctx.translate(W * .79, H * .29); ctx.rotate(globalTime * .06 + sceneIndex * .3); ctx.strokeStyle = theme.accent; ctx.globalAlpha = .12; ctx.lineWidth = 2;
     for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.arc(0, 0, 68 + i * 37 + Math.sin(globalTime * .7 + i) * 5, .3, Math.PI * 1.56); ctx.stroke(); } ctx.restore();
-    // Progress line and chapter marker.
-    roundedRect(ctx, 54, 62, W - 108, 6, 3, 'rgba(255,255,255,.13)'); roundedRect(ctx, 54, 62, (W - 108) * ((sceneIndex + p) / story.scenes.length), 6, 3, theme.accent);
-    ctx.fillStyle = theme.accent; ctx.font = '800 18px system-ui, sans-serif'; ctx.letterSpacing = '3px'; ctx.fillText('WIREUNWIRED', 54, 112);
-    ctx.fillStyle = 'rgba(235,244,252,.62)'; ctx.font = '700 13px system-ui, sans-serif'; ctx.letterSpacing = '2px'; ctx.fillText((story.category || theme.tag).slice(0, 27).toUpperCase(), 54, 145);
-    ctx.fillStyle = 'rgba(235,244,252,.45)'; ctx.font = '700 13px system-ui, sans-serif'; ctx.letterSpacing = '1px'; ctx.textAlign = 'right'; ctx.fillText(`${String(sceneIndex + 1).padStart(2, '0')} / ${String(story.scenes.length).padStart(2, '0')}`, W - 54, 112); ctx.textAlign = 'left';
+    // Segmented progress makes the total number of slides obvious at a glance.
+    const segmentGap = 8; const segmentWidth = (W - 108 - segmentGap * (story.scenes.length - 1)) / story.scenes.length;
+    for (let i = 0; i < story.scenes.length; i++) {
+      const sx = 54 + i * (segmentWidth + segmentGap);
+      roundedRect(ctx, sx, 62, segmentWidth, 7, 3.5, 'rgba(255,255,255,.18)');
+      const amount = i < sceneIndex ? 1 : (i === sceneIndex ? p : 0);
+      if (amount > 0.015) roundedRect(ctx, sx, 62, Math.max(2, segmentWidth * amount), 7, 3.5, theme.accent);
+    }
+    // High-contrast slide counter stays visible in every scene (e.g. SLIDE 01 OF 05).
+    roundedRect(ctx, W - 218, 84, 164, 35, 9, 'rgba(8,15,24,.78)', 'rgba(180,211,229,.24)');
+    ctx.fillStyle = theme.accent; ctx.font = '800 12px system-ui, sans-serif'; ctx.letterSpacing = '1px'; ctx.textAlign = 'center';
+    ctx.fillText(`SLIDE ${String(sceneIndex + 1).padStart(2, '0')} OF ${String(story.scenes.length).padStart(2, '0')}`, W - 136, 106); ctx.textAlign = 'left';
+    ctx.fillStyle = theme.accent; ctx.font = '800 18px system-ui, sans-serif'; ctx.letterSpacing = '3px'; ctx.fillText('WIREUNWIRED', 54, 126);
+    ctx.fillStyle = 'rgba(235,244,252,.66)'; ctx.font = '700 13px system-ui, sans-serif'; ctx.letterSpacing = '2px'; ctx.fillText((story.category || theme.tag).slice(0, 27).toUpperCase(), 54, 157);
     const intro = sceneIndex === 0; const outro = sceneIndex === story.scenes.length - 1;
     if (intro) {
       roundedRect(ctx, 54, 214, 220, 38, 8, theme.secondary);
@@ -235,11 +261,22 @@
       ctx.fillStyle = theme.accent; ctx.font = '800 14px system-ui, sans-serif'; ctx.letterSpacing = '2px'; ctx.fillText(label, 54, 232);
     }
     const yBase = intro ? 355 : 320; const slide = (1 - fade) * 28; ctx.save(); ctx.globalAlpha = fade; ctx.translate(0, slide);
+    const headlineText = scene.headline || '';
+    const bodyText = scene.body || scene.visualDirection || '';
+    const headlineDuration = Math.min(1.65, Math.max(.62, headlineText.length / 31));
+    const bodyDelay = Math.min(headlineDuration + .12, duration * .48);
+    const bodyDuration = Math.min(2.15, Math.max(.65, bodyText.length / 48), Math.max(.5, duration - bodyDelay - .42));
+    const headlineProgress = Math.max(0, Math.min(1, localTime / headlineDuration));
+    const bodyProgress = Math.max(0, Math.min(1, (localTime - bodyDelay) / bodyDuration));
+    const headlineChars = Math.ceil(headlineText.length * headlineProgress);
+    const bodyChars = Math.ceil(bodyText.length * bodyProgress);
+    const titleTyping = headlineProgress < 1;
+    const bodyTyping = bodyText.length > 0 && localTime >= bodyDelay && bodyProgress < 1;
     ctx.fillStyle = '#f5f8fc'; ctx.font = `850 ${intro ? 54 : 49}px system-ui, sans-serif`; ctx.letterSpacing = '-1.6px';
-    const headlineLines = wrapText(ctx, scene.headline, 54, yBase, W - 108, intro ? 68 : 62, 4);
+    const headlineLines = wrapText(ctx, headlineText, 54, yBase, W - 108, intro ? 68 : 62, 4, headlineChars, titleTyping, globalTime);
     const bodyY = yBase + headlineLines * (intro ? 68 : 62) + 33;
     ctx.fillStyle = '#bdcbd9'; ctx.font = '500 25px system-ui, sans-serif'; ctx.letterSpacing = '0px';
-    wrapText(ctx, scene.body || scene.visualDirection || '', 56, bodyY, W - 112, 38, 5);
+    wrapText(ctx, bodyText, 56, bodyY, W - 112, 38, 5, bodyChars, bodyTyping, globalTime + .4);
     ctx.restore();
     // Lower visual motif reacts to time and audio-cue family.
     const motifY = H - 300; ctx.save(); ctx.globalAlpha = .8;
@@ -382,12 +419,19 @@
     }
   }
   function createAudioEngineInContext(ctx, moodName, destination) {
-    const master = ctx.createGain(); master.gain.value = .85; master.connect(destination);
+    // A compressor plus a stronger output bus helps the soundtrack stay audible on phones
+    // without letting impacts peak uncontrollably in the exported recording.
+    const master = ctx.createGain(); master.gain.value = .92;
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -17; compressor.knee.value = 18; compressor.ratio.value = 5.5;
+    compressor.attack.value = .004; compressor.release.value = .24;
+    master.connect(compressor); compressor.connect(destination);
     const mood = MOODS[moodName] || MOODS.futuristic; const oscillators = [];
     if (mood.notes.length) {
-      const filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = mood.filter; filter.Q.value = .5; filter.connect(master);
+      const filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = mood.filter; filter.Q.value = .65; filter.connect(master);
       ['sine', 'triangle', 'sine'].forEach((type, i) => {
-        const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.type = type; osc.frequency.value = mood.notes[i]; gain.gain.value = mood.volume * [.36, .23, .12][i]; osc.connect(gain); gain.connect(filter); osc.start(); oscillators.push({ osc, gain });
+        const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.type = type; osc.frequency.value = mood.notes[i];
+        gain.gain.value = mood.volume * [.48, .31, .19][i]; osc.connect(gain); gain.connect(filter); osc.start(); oscillators.push({ osc, gain });
       });
     }
     function chord(index, when) {
@@ -398,13 +442,30 @@
     function playCue(cueName, when) {
       const cue = normalizeCue(cueName); if (cue === 'soft') return;
       if (cue === 'impact') {
-        const osc = ctx.createOscillator(), gain = ctx.createGain(), filter = ctx.createBiquadFilter(); osc.type = 'sine'; osc.frequency.setValueAtTime(100, when); osc.frequency.exponentialRampToValueAtTime(37, when + .38); filter.type = 'lowpass'; filter.frequency.value = 200;
-        gain.gain.setValueAtTime(.0001, when); gain.gain.exponentialRampToValueAtTime(.17 * mood.cue, when + .02); gain.gain.exponentialRampToValueAtTime(.0001, when + .48); osc.connect(filter); filter.connect(gain); gain.connect(master); osc.start(when); osc.stop(when + .51);
+        // A low thump plus a short mid-frequency click makes the impact audible on small speakers.
+        const osc = ctx.createOscillator(), gain = ctx.createGain(), filter = ctx.createBiquadFilter();
+        osc.type = 'sine'; osc.frequency.setValueAtTime(125, when); osc.frequency.exponentialRampToValueAtTime(48, when + .36);
+        filter.type = 'lowpass'; filter.frequency.value = 260;
+        gain.gain.setValueAtTime(.0001, when); gain.gain.exponentialRampToValueAtTime(.31 * mood.cue, when + .018); gain.gain.exponentialRampToValueAtTime(.0001, when + .46);
+        osc.connect(filter); filter.connect(gain); gain.connect(master); osc.start(when); osc.stop(when + .49);
+        const n = Math.floor(ctx.sampleRate * .16); const buffer = ctx.createBuffer(1, n, ctx.sampleRate); const values = buffer.getChannelData(0);
+        for (let i = 0; i < n; i++) values[i] = (Math.random() * 2 - 1) * (1 - i / n);
+        const click = ctx.createBufferSource(), clickFilter = ctx.createBiquadFilter(), clickGain = ctx.createGain(); click.buffer = buffer;
+        clickFilter.type = 'bandpass'; clickFilter.frequency.value = 950; clickFilter.Q.value = .85;
+        clickGain.gain.setValueAtTime(.16 * mood.cue, when); clickGain.gain.exponentialRampToValueAtTime(.0001, when + .15);
+        click.connect(clickFilter); clickFilter.connect(clickGain); clickGain.connect(master); click.start(when); click.stop(when + .16);
       } else if (cue === 'whoosh' || cue === 'riser') {
-        const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * .65), ctx.sampleRate); const values = buffer.getChannelData(0); for (let i = 0; i < values.length; i++) values[i] = (Math.random() * 2 - 1) * (i / values.length);
-        const source = ctx.createBufferSource(), filter = ctx.createBiquadFilter(), gain = ctx.createGain(); source.buffer = buffer; filter.type = 'bandpass'; filter.frequency.setValueAtTime(300, when); filter.frequency.exponentialRampToValueAtTime(cue === 'riser' ? 3500 : 1800, when + .55); filter.Q.value = .7; gain.gain.setValueAtTime(.0001, when); gain.gain.linearRampToValueAtTime(.045 * mood.cue, when + .25); gain.gain.exponentialRampToValueAtTime(.0001, when + .62); source.connect(filter); filter.connect(gain); gain.connect(master); source.start(when); source.stop(when + .65);
+        const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * .72), ctx.sampleRate); const values = buffer.getChannelData(0);
+        for (let i = 0; i < values.length; i++) values[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / values.length);
+        const source = ctx.createBufferSource(), filter = ctx.createBiquadFilter(), gain = ctx.createGain(); source.buffer = buffer;
+        filter.type = 'bandpass'; filter.frequency.setValueAtTime(430, when); filter.frequency.exponentialRampToValueAtTime(cue === 'riser' ? 4200 : 3000, when + .58); filter.Q.value = .55;
+        gain.gain.setValueAtTime(.0001, when); gain.gain.linearRampToValueAtTime(.19 * mood.cue, when + .22); gain.gain.exponentialRampToValueAtTime(.0001, when + .7);
+        source.connect(filter); filter.connect(gain); gain.connect(master); source.start(when); source.stop(when + .73);
       } else {
-        const osc = ctx.createOscillator(), gain = ctx.createGain(); osc.type = 'sine'; osc.frequency.setValueAtTime(580, when); osc.frequency.exponentialRampToValueAtTime(310, when + .1); gain.gain.setValueAtTime(.0001, when); gain.gain.exponentialRampToValueAtTime(.04 * mood.cue, when + .01); gain.gain.exponentialRampToValueAtTime(.0001, when + .18); osc.connect(gain); gain.connect(master); osc.start(when); osc.stop(when + .2);
+        const osc = ctx.createOscillator(), gain = ctx.createGain(); osc.type = 'triangle';
+        osc.frequency.setValueAtTime(740, when); osc.frequency.exponentialRampToValueAtTime(360, when + .13);
+        gain.gain.setValueAtTime(.0001, when); gain.gain.exponentialRampToValueAtTime(.13 * mood.cue, when + .01); gain.gain.exponentialRampToValueAtTime(.0001, when + .24);
+        osc.connect(gain); gain.connect(master); osc.start(when); osc.stop(when + .26);
       }
     }
     return { ctx, chord, playCue, close: () => { oscillators.forEach(o => { try { o.osc.stop(); } catch (_) {} }); return ctx.close(); } };
@@ -453,7 +514,7 @@
       if (story.scenes.length > 8) showMessage(els.inputMessage, 'Using the first 10 scenes can make the result busy. For best pacing, use 4–6 scenes.', '');
       prepared = { story, total };
       renderSceneCards(story); els.previewPanel.hidden = false; els.renderPanel.hidden = true;
-      if (!els.inputMessage.textContent.startsWith('Using the first 10')) showMessage(els.inputMessage, `Ready: ${story.scenes.length} scenes · about ${Math.round(total)} seconds. Review them below, then render.`, 'success');
+      if (!els.inputMessage.textContent.startsWith('Using the first 10')) showMessage(els.inputMessage, `Ready: ${story.scenes.length} slides · about ${Math.round(total)} seconds. Review them below, then render.`, 'success');
       els.previewPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) { showMessage(els.inputMessage, error.message, 'error'); }
   }
