@@ -54,7 +54,7 @@
         </div>
         <div class="story-summary"><div class="summary-kicker">STORY TITLE</div><div id="storyTitle" class="story-title"></div><div id="storyCategory" class="story-category"></div></div>
         <div id="sceneList" class="scene-list"></div>
-        <div class="render-settings"><div><span class="setting-label">FORMAT</span><strong>Portrait · 9:16</strong></div><div><span class="setting-label">OUTPUT</span><strong>Browser video (.webm / .mp4)</strong></div><div><span class="setting-label">VOICEOVER</span><strong>Off</strong></div></div>
+        <div class="render-settings"><div><span class="setting-label">FORMAT</span><strong>Portrait · 9:16</strong></div><div><span class="setting-label">SOCIAL EXPORT</span><strong>MP4 conversion available</strong></div><div><span class="setting-label">VOICEOVER</span><strong>Off</strong></div></div>
         <button id="renderBtn" class="primary-button render-button"><span>Render video</span><span class="button-arrow">↗</span></button>
         <p class="tiny-note">Keep this page open while rendering. Video and audio are generated locally in your browser.</p>
       </section>
@@ -64,7 +64,7 @@
         <div class="video-frame"><canvas id="videoCanvas" width="720" height="1280" aria-label="Video preview canvas"></canvas><div id="renderOverlay" class="render-overlay"><span class="live-dot"></span><span id="renderStatus">Preparing the scene…</span></div></div>
         <div class="progress-row"><span id="progressLabel">0% complete</span><span id="timeLabel">00:00 / 00:00</span></div><div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
         <div id="renderMessage" class="inline-message" role="status" aria-live="polite"></div>
-        <div id="resultActions" class="result-actions" hidden><button id="downloadBtn" class="primary-button"><span>Save video to phone</span><span class="button-arrow">↓</span></button><button id="shareBtn" class="secondary-button" hidden>Share video</button><button id="newVideoBtn" class="secondary-button">Create another video</button><p class="tiny-note">Exported as WebM. Some platforms prefer MP4; conversion can be added later.</p></div>
+        <div id="resultActions" class="result-actions" hidden><button id="mp4Btn" class="primary-button"><span>Convert to MP4 for social apps</span><span class="button-arrow">⇄</span></button><button id="downloadBtn" class="secondary-button"><span>Save original WebM</span><span class="button-arrow">↓</span></button><button id="shareBtn" class="secondary-button" hidden>Share MP4 file</button><button id="newVideoBtn" class="secondary-button">Create another video</button><p id="exportHint" class="tiny-note">Social apps are more consistent with MP4. Conversion happens on this device, may take a few minutes, and requires an internet connection the first time to download the converter. Your video is not uploaded.</p></div>
         <button id="cancelBtn" class="text-button cancel-button" hidden>Cancel render</button>
       </section>
 

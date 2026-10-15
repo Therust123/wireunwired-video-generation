@@ -1,70 +1,32 @@
-# WireUnWired Video Studio (PWA MVP)
+# WireUnWired Video Studio v0.4 — MP4 social export
 
-A phone-friendly progressive web app that turns a WireUnWired AI Generator script into a short, portrait news video. It runs in the browser and does not send the pasted script to a server.
+This is a static progressive web app for turning a WireUnWired scene script into a vertical, audio-led news video. No platform uploads or AI APIs are used.
 
-## MVP features
+## What changed
 
-- Paste the expected WireUnWired JSON (`title`, `category`, `music_mood`, `scenes[]`) or paste a plain-text script with scene paragraphs separated by blank lines.
-- Review scene headlines, body copy, scene durations, and audio cues before rendering. Preview the improved futuristic soundtrack and scene-change whoosh directly from the input screen.
-- Generate animated 9:16 motion-graphic scenes, optional thumbnail imagery when a CORS-accessible image URL is provided, procedural background music, and scene-specific sound effects. The futuristic preset uses a warm harmonic pad and timed synth-pluck motif (rather than a constant watery-sounding tone).
-- Record a local video with browser MediaRecorder; save or share the file from a compatible mobile browser.
-- Install as a PWA on Android or iOS after hosting over HTTPS. App shell can be cached for offline access after first load.
+- Prefer native MP4 recording when the browser supports it.
+- When the browser only records WebM (common on Android Chrome), show **Convert to MP4 for social apps**.
+- Conversion uses FFmpeg.wasm locally in the browser to create a real H.264/AAC MP4; it does not just rename the file.
+- The first conversion downloads the FFmpeg converter from a public CDN (roughly 25–35 MB of assets depending on transfer compression). Conversion can take several minutes on a phone and needs an internet connection for the initial download. Video data stays on-device.
+- Share MP4 via the native share sheet when the browser supports sharing files. Otherwise save the MP4 and attach it inside WhatsApp, X, or YouTube. The app does not publish anything directly.
+- Updated the service-worker cache to v4.
 
-## Important limitations
+## Deploy to the existing GitHub Pages repository
 
-- There is deliberately no voice-over, AI image API, cloud rendering, social upload, or WordPress integration in this first version.
-- Current export is the browser's supported recording format: normally WebM in Chromium; some Safari versions may export MP4. Playback and editing support vary by platform.
-- The initial visual system uses branded motion graphics. It does not invent photorealistic images; it will use an explicitly supplied, CORS-accessible thumbnail if available.
-- Keep the app in the foreground during rendering. Short videos (roughly 20–40 seconds) are the best mobile starting point. The app currently caps total duration at 90 seconds.
-- Generated audio is procedural synthesized music/effects; it is not a human-composed soundtrack. The futuristic preset uses a restrained major-key synth motif with a warm pad; the existing scene-change whoosh is retained. Use the on-page sound-preview button to audition the new music and transition before rendering a full video.
-- If a remote image doesn't allow cross-origin display, the scene automatically falls back to abstract motion graphics.
+Upload/replace these files in the repository root: `app.js`, `index.html`, `styles.css`, and `sw.js`. Keep `manifest.webmanifest`, `.nojekyll`, and the existing `icons/` folder. The AI Generator prompt can remain unchanged. Commit the changes and wait for GitHub Pages to redeploy.
 
-## Test locally on a computer
+Then reopen the installed PWA and refresh. If the previous app remains cached, close its tabs and reopen after deployment.
 
-You need Python 3 installed. In this folder run:
+## Use
 
-```bash
-python -m http.server 8000
-```
+1. Paste the JSON/script from WireUnWired's AI Generator.
+2. Prepare, review, and render.
+3. If the result says WebM, tap **Convert to MP4 for social apps** and keep the page in the foreground.
+4. Save MP4, or tap Share MP4 if the phone/browser offers it. For YouTube and X, you may still need to open the respective app and upload/select the saved MP4 through its media picker.
 
-Open `http://localhost:8000`. To test installability, hosting must use HTTPS or localhost. Open the app, tap **Load sample**, tap **Prepare video**, review the scenes, and tap **Render video**. Keep the tab visible until rendering finishes.
+## Notes
 
-## Publish for free with GitHub Pages (so the phone can install it)
-
-1. Create a new GitHub repository, for example `wireunwired-video-studio`.
-2. Upload the *contents* of this folder to the repository root. Ensure `index.html`, `app.js`, `styles.css`, `manifest.webmanifest`, `sw.js`, and `icons/` are at the root.
-3. In repository **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`, and save.
-4. Wait for GitHub Pages to show the HTTPS site URL. Open it on your Android phone in Chrome.
-5. Use Chrome's **Install app** option or menu → **Install app / Add to Home screen**. On iPhone, open the URL in Safari, tap Share → **Add to Home Screen**.
-
-GitHub Pages is a static hosting option; it needs no API key and does not upload your article text to a rendering backend. GitHub account/repository visibility and the current Pages terms/settings still apply.
-
-## Input JSON shape
-
-```json
-{
-  "title": "A clear news headline",
-  "category": "TECHNOLOGY",
-  "source_url": "https://example.com/article",
-  "thumbnail_url": "https://example.com/thumbnail.jpg",
-  "music_mood": "futuristic",
-  "scenes": [
-    {
-      "headline": "The main development",
-      "body": "One short, verified explanation of what happened.",
-      "duration_sec": 5,
-      "audio_cue": "impact",
-      "visual_direction": "Glowing data lines on a dark background"
-    }
-  ]
-}
-```
-
-Supported sound cues: `impact`, `whoosh`, `pulse`, `riser`, `soft`. Supported music moods: `cinematic`, `soft`, `tense`, `futuristic`, `hopeful`, `none`. Scene fields can be omitted where appropriate. A script with 4–6 scenes generally gives the best pacing.
-
-## Files
-
-- `index.html`, `styles.css`: app UI
-- `app.js`: parsing, scene layout, Web Audio sound generation, canvas animation, recording and save/share
-- `manifest.webmanifest`, `sw.js`: PWA install metadata and offline app shell
-- `icons/`: app icons
+- The MP4 converter is optional and loads only when requested; ordinary video rendering remains lightweight.
+- Very long/large files can exceed mobile memory. The app blocks conversion of source files larger than 150 MB; shorter videos are recommended.
+- Browser, OS and platform restrictions vary. MP4 greatly improves compatibility but cannot guarantee that every target app exposes a share-sheet option.
+- FFmpeg.wasm performance is much slower than native FFmpeg, so expect extra wait time on mobile.

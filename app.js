@@ -7,7 +7,7 @@
     storyTitle: $('storyTitle'), storyCategory: $('storyCategory'), sceneCount: $('sceneCount'), sceneList: $('sceneList'),
     renderBtn: $('renderBtn'), renderPanel: $('renderPanel'), canvas: $('videoCanvas'), renderStatus: $('renderStatus'),
     progressLabel: $('progressLabel'), timeLabel: $('timeLabel'), progressBar: $('progressBar'), renderMessage: $('renderMessage'),
-    resultActions: $('resultActions'), downloadBtn: $('downloadBtn'), shareBtn: $('shareBtn'), newVideoBtn: $('newVideoBtn'),
+    resultActions: $('resultActions'), mp4Btn: $('mp4Btn'), downloadBtn: $('downloadBtn'), shareBtn: $('shareBtn'), exportHint: $('exportHint'), newVideoBtn: $('newVideoBtn'),
     cancelBtn: $('cancelBtn'), installBtn: $('installBtn'), toast: $('toast')
   };
   const SAMPLE = {
@@ -40,7 +40,11 @@
   };
   let prepared = null;
   let currentBlob = null;
+  let originalBlob = null;
   let currentUrl = null;
+  let ffmpegScriptPromise = null;
+  let ffmpegInstance = null;
+  let ffmpegFetchFile = null;
   let deferredInstallPrompt = null;
   let renderState = null;
   let soundPreviewEngine = null;
@@ -341,7 +345,9 @@
   }
   function selectedMimeType() {
     if (!window.MediaRecorder) throw new Error('This browser cannot record videos. Use Chrome on Android or Safari on a supported iPhone.');
-    const types = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4'];
+    // Prefer MP4 when the browser can record it natively. Chrome on many Android devices
+    // falls back to WebM; the export screen then offers an actual MP4 transcode (not a rename).
+    const types = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1.42E01E', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
     return types.find(type => MediaRecorder.isTypeSupported(type)) || '';
   }
   async function startRender() {
@@ -382,10 +388,12 @@
         if (renderToken.cancelled) { showMessage(els.renderMessage, 'Render cancelled. Your original script is still here.'); return; }
         const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'video/webm' });
         if (!blob.size) { showMessage(els.renderMessage, 'The browser produced an empty video. Try again in Chrome and keep the app in the foreground.', 'error'); return; }
-        currentBlob = blob; currentUrl = URL.createObjectURL(blob);
+        originalBlob = blob; currentBlob = blob; currentUrl = URL.createObjectURL(blob);
         els.progressBar.style.width = '100%'; els.progressLabel.textContent = '100% complete'; els.timeLabel.textContent = `${fmtTime(renderToken.total)} / ${fmtTime(renderToken.total)}`;
         els.renderStatus.textContent = 'Video ready'; els.resultActions.hidden = false;
-        showMessage(els.renderMessage, `Your video is ready (${(blob.size / (1024 * 1024)).toFixed(1)} MB). Save it to your phone to review the result.`, 'success');
+        updateExportActions();
+        const nativeMp4 = /mp4/i.test(blob.type);
+        showMessage(els.renderMessage, `Your video is ready as ${nativeMp4 ? 'MP4' : 'WebM'} (${(blob.size / (1024 * 1024)).toFixed(1)} MB). ${nativeMp4 ? 'You can save or share this file.' : 'Convert it to MP4 for better compatibility with social apps.'}`, 'success');
         setShareVisibility(); els.resultActions.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       };
       try { if ('wakeLock' in navigator) renderToken.wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
@@ -596,21 +604,125 @@
   function filename() {
     return (prepared?.story?.title || 'wireunwired-video').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 58) || 'wireunwired-video';
   }
-  function videoExtension() { return currentBlob && /mp4/i.test(currentBlob.type) ? 'mp4' : 'webm'; }
+  function videoExtension(blob = currentBlob) { return blob && /mp4/i.test(blob.type) ? 'mp4' : 'webm'; }
+  function updateExportActions() {
+    const isMp4 = videoExtension() === 'mp4';
+    els.mp4Btn.hidden = isMp4;
+    els.downloadBtn.className = isMp4 ? 'primary-button' : 'secondary-button';
+    const label = els.downloadBtn.querySelector('span');
+    if (label) label.textContent = isMp4 ? 'Save MP4 to phone' : 'Save original WebM';
+    const arrow = els.downloadBtn.querySelector('.button-arrow');
+    if (arrow) arrow.textContent = '↓';
+    els.shareBtn.textContent = 'Share MP4 file';
+    if (els.exportHint) {
+      els.exportHint.textContent = isMp4
+        ? 'MP4 (H.264 video + AAC audio) is the most compatible export for social platforms. Use Share MP4 where supported, or save the file and select it inside WhatsApp, X or YouTube. Nothing is uploaded by this app.'
+        : 'This browser recorded WebM. Tap “Convert to MP4 for social apps” for a real format conversion—not just a filename change. The first conversion downloads a large converter and may take a few minutes on a phone. Your video stays on this device.';
+    }
+  }
   function downloadVideo() {
     if (!currentBlob || !currentUrl) return;
     const a = document.createElement('a'); a.href = currentUrl; a.download = `${filename()}.${videoExtension()}`; document.body.append(a); a.click(); a.remove();
-    toast('Video download started. Check your Downloads folder.');
+    toast(`Downloading ${videoExtension().toUpperCase()} video. Check your Downloads folder.`);
   }
   function setShareVisibility() {
-    els.shareBtn.hidden = !(currentBlob && navigator.share && navigator.canShare && (() => { try { return navigator.canShare({ files: [new File([currentBlob], `${filename()}.${videoExtension()}`, { type: currentBlob.type || 'video/webm' })] }); } catch (_) { return false; } })());
+    const isMp4 = currentBlob && /mp4/i.test(currentBlob.type);
+    els.shareBtn.hidden = !(isMp4 && navigator.share && navigator.canShare && (() => { try { return navigator.canShare({ files: [new File([currentBlob], `${filename()}.mp4`, { type: 'video/mp4' })] }); } catch (_) { return false; } })());
   }
   async function shareVideo() {
-    if (!currentBlob || !navigator.share) return;
+    if (!currentBlob || !navigator.share || videoExtension() !== 'mp4') {
+      toast('Save the MP4, then attach it from the target app.'); return;
+    }
     try {
-      const file = new File([currentBlob], `${filename()}.${videoExtension()}`, { type: currentBlob.type || (videoExtension() === 'mp4' ? 'video/mp4' : 'video/webm') });
+      const file = new File([currentBlob], `${filename()}.mp4`, { type: 'video/mp4' });
       await navigator.share({ title: prepared.story.title, text: 'Created with WireUnWired Video Studio', files: [file] });
-    } catch (error) { if (error.name !== 'AbortError') toast('Sharing was not available. Save the video instead.'); }
+    } catch (error) { if (error.name !== 'AbortError') toast('Sharing was not available. Save the MP4 and attach it inside the platform.'); }
+  }
+  function loadScriptOnce(src) {
+    if (window.FFmpeg && typeof window.FFmpeg.createFFmpeg === 'function') return Promise.resolve();
+    if (ffmpegScriptPromise) return ffmpegScriptPromise;
+    ffmpegScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src; script.async = true;
+      script.onload = () => window.FFmpeg && typeof window.FFmpeg.createFFmpeg === 'function'
+        ? resolve()
+        : reject(new Error('The converter library loaded but its API was not found.'));
+      script.onerror = () => reject(new Error('Could not download the MP4 converter. Check your internet connection and try again.'));
+      document.head.appendChild(script);
+    });
+    return ffmpegScriptPromise;
+  }
+  async function getMp4Converter() {
+    if (ffmpegInstance && ffmpegInstance.isLoaded()) return { ffmpeg: ffmpegInstance, fetchFile: ffmpegFetchFile };
+    await loadScriptOnce('https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js');
+    const lib = window.FFmpeg;
+    if (!lib || typeof lib.createFFmpeg !== 'function' || typeof lib.fetchFile !== 'function') {
+      throw new Error('The MP4 converter is unavailable in this browser. You can still save the original WebM.');
+    }
+    ffmpegFetchFile = lib.fetchFile;
+    ffmpegInstance = lib.createFFmpeg({
+      log: false,
+      mainName: 'main',
+      corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
+    });
+    await ffmpegInstance.load();
+    return { ffmpeg: ffmpegInstance, fetchFile: ffmpegFetchFile };
+  }
+  async function convertToMp4() {
+    if (!currentBlob || videoExtension() === 'mp4') return;
+    if (currentBlob.size > 150 * 1024 * 1024) {
+      showMessage(els.renderMessage, 'This video is too large for safe phone conversion. Try a shorter video, or save the WebM and convert it on a computer.', 'error');
+      return;
+    }
+    const oldLabel = els.mp4Btn.querySelector('span');
+    const originalLabel = oldLabel ? oldLabel.textContent : 'Convert to MP4 for social apps';
+    els.mp4Btn.disabled = true;
+    if (oldLabel) oldLabel.textContent = 'Preparing MP4 converter…';
+    els.renderStatus.textContent = 'Loading MP4 converter…';
+    showMessage(els.renderMessage, 'First-time setup: downloading the local MP4 converter. This can take a while on mobile. Your video is not uploaded.', '');
+    try {
+      const { ffmpeg, fetchFile } = await getMp4Converter();
+      try { ffmpeg.FS('unlink', 'input.webm'); } catch (_) {}
+      try { ffmpeg.FS('unlink', 'output.mp4'); } catch (_) {}
+      const sourceBlob = currentBlob;
+      await ffmpeg.FS('writeFile', 'input.webm', await fetchFile(sourceBlob));
+      if (oldLabel) oldLabel.textContent = 'Converting to MP4…';
+      els.renderStatus.textContent = 'Converting video to MP4…';
+      try {
+        ffmpeg.setProgress(({ ratio }) => {
+          if (Number.isFinite(ratio)) {
+            const pct = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+            els.renderStatus.textContent = `Converting to MP4 · ${pct}%`;
+          }
+        });
+      } catch (_) {}
+      await ffmpeg.run(
+        '-i', 'input.webm',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '27', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
+        'output.mp4'
+      );
+      const fileData = ffmpeg.FS('readFile', 'output.mp4');
+      if (!fileData || !fileData.length) throw new Error('The converter returned an empty MP4 file.');
+      // Copy out of the WASM filesystem before cleaning it up.
+      const safeBytes = new Uint8Array(fileData);
+      const mp4Blob = new Blob([safeBytes], { type: 'video/mp4' });
+      try { ffmpeg.FS('unlink', 'input.webm'); } catch (_) {}
+      try { ffmpeg.FS('unlink', 'output.mp4'); } catch (_) {}
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentBlob = mp4Blob; currentUrl = URL.createObjectURL(mp4Blob);
+      updateExportActions(); setShareVisibility();
+      showMessage(els.renderMessage, `MP4 is ready (${(mp4Blob.size / (1024 * 1024)).toFixed(1)} MB). Save it to your phone, then select it inside WhatsApp, X or YouTube.`, 'success');
+      els.renderStatus.textContent = 'MP4 ready';
+    } catch (error) {
+      console.error('MP4 conversion failed', error);
+      const detail = error && error.message ? ` Details: ${error.message}` : '';
+      showMessage(els.renderMessage, `MP4 conversion failed.${detail} The original WebM is still available. You can retry or save it.`, 'error');
+      els.renderStatus.textContent = 'MP4 conversion failed';
+    } finally {
+      els.mp4Btn.disabled = false;
+      if (oldLabel) oldLabel.textContent = originalLabel;
+    }
   }
   function loadSample() {
     els.input.value = JSON.stringify(SAMPLE, null, 2); updateCharCount();
@@ -635,9 +747,10 @@
   els.soundPreviewBtn.addEventListener('click', previewSoundDesign);
   els.renderBtn.addEventListener('click', startRender);
   els.cancelBtn.addEventListener('click', cancelRender);
+  els.mp4Btn.addEventListener('click', convertToMp4);
   els.downloadBtn.addEventListener('click', downloadVideo);
   els.shareBtn.addEventListener('click', shareVideo);
-  els.newVideoBtn.addEventListener('click', () => { cancelRender(); prepared = null; currentBlob = null; if (currentUrl) URL.revokeObjectURL(currentUrl); currentUrl = null; els.renderPanel.hidden = true; els.previewPanel.hidden = true; els.input.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  els.newVideoBtn.addEventListener('click', () => { cancelRender(); prepared = null; currentBlob = null; originalBlob = null; if (currentUrl) URL.revokeObjectURL(currentUrl); currentUrl = null; els.renderPanel.hidden = true; els.previewPanel.hidden = true; els.input.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   window.addEventListener('pagehide', stopSoundPreview);
   window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferredInstallPrompt = event; els.installBtn.hidden = false; });
   els.installBtn.addEventListener('click', async () => {
