@@ -626,50 +626,117 @@
     toast(`Downloading ${videoExtension().toUpperCase()} video. Check your Downloads folder.`);
   }
   function setShareVisibility() {
-    const isMp4 = currentBlob && /mp4/i.test(currentBlob.type);
-    els.shareBtn.hidden = !(isMp4 && navigator.share && navigator.canShare && (() => { try { return navigator.canShare({ files: [new File([currentBlob], `${filename()}.mp4`, { type: 'video/mp4' })] }); } catch (_) { return false; } })());
+    // Always expose Share after a video exists. WebM can still be shared to some
+    // Android apps; MP4 is preferred but must not be a prerequisite for the button.
+    els.shareBtn.hidden = false;
+    els.shareBtn.disabled = false;
+    els.shareBtn.textContent = `Share ${videoExtension().toUpperCase()} video…`;
+    els.shareBtn.setAttribute('aria-label', `Share ${videoExtension().toUpperCase()} video`);
   }
   async function shareVideo() {
-    if (!currentBlob || !navigator.share || videoExtension() !== 'mp4') {
-      toast('Save the MP4, then attach it from the target app.'); return;
+    if (!currentBlob) {
+      showMessage(els.renderMessage, 'Render a video first, then you can share it.', 'error');
+      return;
     }
+    if (!navigator.share) {
+      showMessage(els.renderMessage, 'Direct file sharing is not supported by this browser. Tap Save video, then attach it from WhatsApp or select it in X / YouTube.', 'error');
+      toast('Save the video, then attach it from the platform app.');
+      return;
+    }
+    const ext = videoExtension();
+    const mime = currentBlob.type || (ext === 'mp4' ? 'video/mp4' : 'video/webm');
     try {
-      const file = new File([currentBlob], `${filename()}.mp4`, { type: 'video/mp4' });
-      await navigator.share({ title: prepared.story.title, text: 'Created with WireUnWired Video Studio', files: [file] });
-    } catch (error) { if (error.name !== 'AbortError') toast('Sharing was not available. Save the MP4 and attach it inside the platform.'); }
+      const file = new File([currentBlob], `${filename()}.${ext}`, { type: mime });
+      if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+        showMessage(els.renderMessage, `Your browser cannot share this ${ext.toUpperCase()} file directly. Save it to your phone, then attach it inside WhatsApp or select it in X / YouTube.`, 'error');
+        return;
+      }
+      showMessage(els.renderMessage, `Opening your phone's share menu for the ${ext.toUpperCase()} video…`);
+      await navigator.share({ title: prepared?.story?.title || 'WireUnWired video', text: 'Created with WireUnWired Video Studio', files: [file] });
+      showMessage(els.renderMessage, 'Share menu closed. If you selected an app, complete the send/post action there.', 'success');
+    } catch (error) {
+      if (error && error.name === 'AbortError') return;
+      console.error('Video sharing failed', error);
+      showMessage(els.renderMessage, `Could not open file sharing${error?.message ? `: ${error.message}` : '.'} Save the video and attach it from the destination app.`, 'error');
+    }
   }
   function loadScriptOnce(src) {
     if (window.FFmpeg && typeof window.FFmpeg.createFFmpeg === 'function') return Promise.resolve();
     if (ffmpegScriptPromise) return ffmpegScriptPromise;
-    ffmpegScriptPromise = new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = src; script.async = true;
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (error) { script.remove(); reject(error); }
+        else resolve();
+      };
+      const timeout = setTimeout(() => finish(new Error('The converter library took too long to load. Check your connection and retry.')), 25000);
+      script.src = src; script.async = true; script.crossOrigin = 'anonymous';
       script.onload = () => window.FFmpeg && typeof window.FFmpeg.createFFmpeg === 'function'
-        ? resolve()
-        : reject(new Error('The converter library loaded but its API was not found.'));
-      script.onerror = () => reject(new Error('Could not download the MP4 converter. Check your internet connection and try again.'));
+        ? finish()
+        : finish(new Error('The converter library loaded, but its API was not found.'));
+      script.onerror = () => finish(new Error(`Could not load converter library from ${new URL(src).hostname}.`));
       document.head.appendChild(script);
+    });
+    ffmpegScriptPromise = promise.catch(error => {
+      // Let the user retry, or let the fallback CDN try, after a failed attempt.
+      ffmpegScriptPromise = null;
+      throw error;
     });
     return ffmpegScriptPromise;
   }
+  async function loadFFmpegLibrary() {
+    const sources = [
+      'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js',
+      'https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js'
+    ];
+    let lastError;
+    for (const src of sources) {
+      try {
+        await loadScriptOnce(src);
+        if (window.FFmpeg && typeof window.FFmpeg.createFFmpeg === 'function') return window.FFmpeg;
+      } catch (error) { lastError = error; }
+    }
+    throw new Error(`Could not load the MP4 converter from either CDN. ${lastError?.message || 'Check internet access and retry.'}`);
+  }
   async function getMp4Converter() {
     if (ffmpegInstance && ffmpegInstance.isLoaded()) return { ffmpeg: ffmpegInstance, fetchFile: ffmpegFetchFile };
-    await loadScriptOnce('https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js');
-    const lib = window.FFmpeg;
-    if (!lib || typeof lib.createFFmpeg !== 'function' || typeof lib.fetchFile !== 'function') {
-      throw new Error('The MP4 converter is unavailable in this browser. You can still save the original WebM.');
-    }
+    const lib = await loadFFmpegLibrary();
+    if (typeof lib.fetchFile !== 'function') throw new Error('The converter did not expose its file loader. Refresh the app and retry.');
     ffmpegFetchFile = lib.fetchFile;
-    ffmpegInstance = lib.createFFmpeg({
-      log: false,
-      mainName: 'main',
-      corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
-    });
-    await ffmpegInstance.load();
-    return { ffmpeg: ffmpegInstance, fetchFile: ffmpegFetchFile };
+    const corePaths = [
+      'https://cdn.jsdelivr.net/npm/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js',
+      'https://unpkg.com/@ffmpeg/core-st@0.11.1/dist/ffmpeg-core.js'
+    ];
+    let lastError;
+    for (const corePath of corePaths) {
+      let candidate;
+      try {
+        candidate = lib.createFFmpeg({ log: false, mainName: 'main', corePath });
+        await candidate.load();
+        ffmpegInstance = candidate;
+        return { ffmpeg: ffmpegInstance, fetchFile: ffmpegFetchFile };
+      } catch (error) {
+        lastError = error;
+        try { candidate?.exit(); } catch (_) {}
+      }
+    }
+    throw new Error(`The MP4 engine could not start. ${lastError?.message || 'The browser may have blocked the converter files.'}`);
   }
   async function convertToMp4() {
-    if (!currentBlob || videoExtension() === 'mp4') return;
+    // Never silently return: explain the state, then visibly update the status before loading WASM.
+    if (!currentBlob) {
+      showMessage(els.renderMessage, 'No video is attached to this screen. Render a video first, then try MP4 conversion.', 'error');
+      toast('Render a video before converting.');
+      return;
+    }
+    if (videoExtension() === 'mp4') {
+      showMessage(els.renderMessage, 'This video is already MP4. Use Save MP4 to phone or Share MP4 video.', 'success');
+      return;
+    }
     if (currentBlob.size > 150 * 1024 * 1024) {
       showMessage(els.renderMessage, 'This video is too large for safe phone conversion. Try a shorter video, or save the WebM and convert it on a computer.', 'error');
       return;
@@ -677,22 +744,31 @@
     const oldLabel = els.mp4Btn.querySelector('span');
     const originalLabel = oldLabel ? oldLabel.textContent : 'Convert to MP4 for social apps';
     els.mp4Btn.disabled = true;
-    if (oldLabel) oldLabel.textContent = 'Preparing MP4 converter…';
+    els.mp4Btn.setAttribute('aria-busy', 'true');
+    if (oldLabel) oldLabel.textContent = 'Loading converter — keep app open…';
     els.renderStatus.textContent = 'Loading MP4 converter…';
-    showMessage(els.renderMessage, 'First-time setup: downloading the local MP4 converter. This can take a while on mobile. Your video is not uploaded.', '');
+    els.progressBar.style.width = '0%';
+    els.progressLabel.textContent = 'Preparing converter';
+    showMessage(els.renderMessage, 'MP4 conversion started. The first run downloads about 25 MB of converter files. Keep this screen open; your video stays on this device.', '');
     try {
+      // Yield once so status text paints before starting large downloads / WASM initialization.
+      await new Promise(resolve => setTimeout(resolve, 60));
       const { ffmpeg, fetchFile } = await getMp4Converter();
       try { ffmpeg.FS('unlink', 'input.webm'); } catch (_) {}
       try { ffmpeg.FS('unlink', 'output.mp4'); } catch (_) {}
       const sourceBlob = currentBlob;
+      showMessage(els.renderMessage, 'Converter loaded. Preparing your video for MP4 encoding…', '');
       await ffmpeg.FS('writeFile', 'input.webm', await fetchFile(sourceBlob));
-      if (oldLabel) oldLabel.textContent = 'Converting to MP4…';
+      if (oldLabel) oldLabel.textContent = 'Converting video…';
       els.renderStatus.textContent = 'Converting video to MP4…';
+      showMessage(els.renderMessage, 'Encoding H.264 video and AAC audio. This can take a few minutes on a phone; keep the app in the foreground.', '');
       try {
         ffmpeg.setProgress(({ ratio }) => {
           if (Number.isFinite(ratio)) {
             const pct = Math.max(0, Math.min(100, Math.round(ratio * 100)));
             els.renderStatus.textContent = `Converting to MP4 · ${pct}%`;
+            els.progressBar.style.width = `${pct}%`;
+            els.progressLabel.textContent = `MP4 conversion · ${pct}%`;
           }
         });
       } catch (_) {}
@@ -704,7 +780,6 @@
       );
       const fileData = ffmpeg.FS('readFile', 'output.mp4');
       if (!fileData || !fileData.length) throw new Error('The converter returned an empty MP4 file.');
-      // Copy out of the WASM filesystem before cleaning it up.
       const safeBytes = new Uint8Array(fileData);
       const mp4Blob = new Blob([safeBytes], { type: 'video/mp4' });
       try { ffmpeg.FS('unlink', 'input.webm'); } catch (_) {}
@@ -712,16 +787,21 @@
       if (currentUrl) URL.revokeObjectURL(currentUrl);
       currentBlob = mp4Blob; currentUrl = URL.createObjectURL(mp4Blob);
       updateExportActions(); setShareVisibility();
-      showMessage(els.renderMessage, `MP4 is ready (${(mp4Blob.size / (1024 * 1024)).toFixed(1)} MB). Save it to your phone, then select it inside WhatsApp, X or YouTube.`, 'success');
+      els.progressBar.style.width = '100%';
+      els.progressLabel.textContent = 'MP4 ready';
+      showMessage(els.renderMessage, `MP4 conversion complete (${(mp4Blob.size / (1024 * 1024)).toFixed(1)} MB). Save it or tap Share MP4 video. X and YouTube may still require uploading it from inside their apps.`, 'success');
       els.renderStatus.textContent = 'MP4 ready';
     } catch (error) {
       console.error('MP4 conversion failed', error);
       const detail = error && error.message ? ` Details: ${error.message}` : '';
-      showMessage(els.renderMessage, `MP4 conversion failed.${detail} The original WebM is still available. You can retry or save it.`, 'error');
+      showMessage(els.renderMessage, `MP4 conversion did not complete.${detail} Your original WebM is still available. Try again with a stable connection, or save the WebM and use the destination app's uploader.`, 'error');
       els.renderStatus.textContent = 'MP4 conversion failed';
+      els.progressLabel.textContent = 'Conversion failed';
     } finally {
       els.mp4Btn.disabled = false;
+      els.mp4Btn.removeAttribute('aria-busy');
       if (oldLabel) oldLabel.textContent = originalLabel;
+      setShareVisibility();
     }
   }
   function loadSample() {

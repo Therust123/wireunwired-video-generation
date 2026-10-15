@@ -1,32 +1,30 @@
-# WireUnWired Video Studio v0.4 — MP4 social export
+# WireUnWired Video Studio v0.5 — conversion feedback and Share fixes
 
-This is a static progressive web app for turning a WireUnWired scene script into a vertical, audio-led news video. No platform uploads or AI APIs are used.
+This static PWA turns a WireUnWired scene script into an audio-led portrait video locally. No social uploads or AI APIs are used.
 
-## What changed
+## Fixes in v0.5
 
-- Prefer native MP4 recording when the browser supports it.
-- When the browser only records WebM (common on Android Chrome), show **Convert to MP4 for social apps**.
-- Conversion uses FFmpeg.wasm locally in the browser to create a real H.264/AAC MP4; it does not just rename the file.
-- The first conversion downloads the FFmpeg converter from a public CDN (roughly 25–35 MB of assets depending on transfer compression). Conversion can take several minutes on a phone and needs an internet connection for the initial download. Video data stays on-device.
-- Share MP4 via the native share sheet when the browser supports sharing files. Otherwise save the MP4 and attach it inside WhatsApp, X, or YouTube. The app does not publish anything directly.
-- Updated the service-worker cache to v4.
+- Conversion now reports every stage visibly and never silently returns if the video is missing or already MP4.
+- The converter attempts two CDN hosts for the FFmpeg wrapper and single-thread core, with retryable error handling.
+- Conversion progress updates the progress bar and stage label.
+- Share is visible after rendering for both WebM and MP4. It attempts to share the actual current file through the phone's native share sheet when supported; otherwise it explains how to save and attach it manually.
+- Service-worker cache is v5, now uses network-first fetch for same-origin app files with offline cache fallback, and no longer masks third-party CDN failures with index.html.
 
-## Deploy to the existing GitHub Pages repository
+## Deploy
 
-Upload/replace these files in the repository root: `app.js`, `index.html`, `styles.css`, and `sw.js`. Keep `manifest.webmanifest`, `.nojekyll`, and the existing `icons/` folder. The AI Generator prompt can remain unchanged. Commit the changes and wait for GitHub Pages to redeploy.
+Replace `app.js`, `index.html`, `styles.css` (can remain unchanged but keep it) and `sw.js` in the root of the existing GitHub Pages repo. Keep `manifest.webmanifest`, `.nojekyll`, and `icons/`. Commit and wait for GitHub Pages.
 
-Then reopen the installed PWA and refresh. If the previous app remains cached, close its tabs and reopen after deployment.
+On the phone, close the installed PWA completely, reopen it with an internet connection, and refresh. The new service worker is `wireunwired-video-studio-v5`. If it still appears stale, open the website URL in Chrome once and refresh before reopening the installed app.
 
-## Use
+## Expected flow
 
-1. Paste the JSON/script from WireUnWired's AI Generator.
-2. Prepare, review, and render.
-3. If the result says WebM, tap **Convert to MP4 for social apps** and keep the page in the foreground.
-4. Save MP4, or tap Share MP4 if the phone/browser offers it. For YouTube and X, you may still need to open the respective app and upload/select the saved MP4 through its media picker.
+1. Render a video.
+2. Tap **Convert to MP4 for social apps**. Status text should immediately say conversion has started. First-time setup downloads the FFmpeg converter; keep the app open.
+3. If conversion finishes, **Save MP4 to phone** and **Share MP4 video…** become available. If conversion fails, a visible error message will tell you why and the original WebM remains saveable.
+4. Share sends the actual available file to the native share sheet if the browser supports file sharing. X and YouTube may still require selecting the saved video from inside their upload flows.
 
-## Notes
+## Limits
 
-- The MP4 converter is optional and loads only when requested; ordinary video rendering remains lightweight.
-- Very long/large files can exceed mobile memory. The app blocks conversion of source files larger than 150 MB; shorter videos are recommended.
-- Browser, OS and platform restrictions vary. MP4 greatly improves compatibility but cannot guarantee that every target app exposes a share-sheet option.
-- FFmpeg.wasm performance is much slower than native FFmpeg, so expect extra wait time on mobile.
+- FFmpeg.wasm downloads a large converter on first run and can be slow or memory-intensive on phones.
+- WebM-to-MP4 encoding is only available if the browser can load the converter assets and supports the required WebAssembly features.
+- The Share button's presence does not guarantee a target app accepts that container; MP4 is preferred for compatibility.

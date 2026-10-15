@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wireunwired-video-studio-v4';
+const CACHE_NAME = 'wireunwired-video-studio-v5';
 const APP_SHELL = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
@@ -8,10 +8,15 @@ self.addEventListener('activate', event => {
 });
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-    if (response && response.ok && new URL(event.request.url).origin === self.location.origin) {
-      const copy = response.clone(); caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+  const requestURL = new URL(event.request.url);
+  // Let CDN resources use their real network response/error. Never respond to a failed
+  // third-party script/wasm request with our index.html, which masks converter failures.
+  if (requestURL.origin !== self.location.origin) return;
+  event.respondWith(fetch(event.request).then(response => {
+    if (response && response.ok) {
+      const copy = response.clone();
+      caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
     }
     return response;
-  }).catch(() => caches.match('./index.html'))));
+  }).catch(() => caches.match(event.request).then(cached => cached || caches.match('./index.html'))));
 });
