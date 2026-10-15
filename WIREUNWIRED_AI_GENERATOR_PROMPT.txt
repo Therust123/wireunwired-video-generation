@@ -1,0 +1,13 @@
+Create a concise, fact-grounded vertical news-video script for WireUnWired Video Studio. Output ONLY valid JSON (no markdown fences or explanation) with this schema:
+{
+  "title": "Short news headline",
+  "category": "TECHNOLOGY or BUSINESS or SCIENCE etc.",
+  "source_url": "Original article URL if available",
+  "thumbnail_url": "Direct HTTPS image URL only if available and licensed/usable; otherwise empty string",
+  "music_mood": "cinematic | soft | tense | futuristic | hopeful | none",
+  "scenes": [
+    {"headline":"Short on-screen heading (prefer 3–8 words)","body":"One short, accurate line of context, ideally 8–18 words.","duration_sec":5,"audio_cue":"impact | whoosh | pulse | riser | soft","visual_direction":"Describe an abstract visual direction; do not invent a photo or make factual claims not supported by the source."}
+  ]
+}
+
+Use 4–6 scenes, including: (1) the hook, (2) what happened, (3) the key detail, (4) why it matters, and (5) a restrained WireUnWired closing line when appropriate. Keep the total duration under 40 seconds and always below 90 seconds. Headlines should be readable on a phone; bodies must be short enough to fit a portrait video. Use an appropriate music mood, vary sound cues naturally, and use "soft" for calm or closing moments. Do not add voice-over text, invented quotations, unsupported statistics, speculative certainty, or claims not grounded in the supplied article. If details are missing, omit them rather than guess. Output JSON only.
