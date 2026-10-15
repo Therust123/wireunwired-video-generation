@@ -3,7 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const els = {
     input: $('scriptInput'), charCount: $('charCount'), sampleBtn: $('sampleBtn'), prepareBtn: $('prepareBtn'),
-    inputMessage: $('inputMessage'), themeSelect: $('themeSelect'), musicSelect: $('musicSelect'), previewPanel: $('previewPanel'),
+    inputMessage: $('inputMessage'), themeSelect: $('themeSelect'), musicSelect: $('musicSelect'), soundPreviewBtn: $('soundPreviewBtn'), previewPanel: $('previewPanel'),
     storyTitle: $('storyTitle'), storyCategory: $('storyCategory'), sceneCount: $('sceneCount'), sceneList: $('sceneList'),
     renderBtn: $('renderBtn'), renderPanel: $('renderPanel'), canvas: $('videoCanvas'), renderStatus: $('renderStatus'),
     progressLabel: $('progressLabel'), timeLabel: $('timeLabel'), progressBar: $('progressBar'), renderMessage: $('renderMessage'),
@@ -43,6 +43,8 @@
   let currentUrl = null;
   let deferredInstallPrompt = null;
   let renderState = null;
+  let soundPreviewEngine = null;
+  let soundPreviewTimeout = null;
   let toastTimer = null;
 
   function showMessage(target, message, type = '') {
@@ -343,6 +345,7 @@
     return types.find(type => MediaRecorder.isTypeSupported(type)) || '';
   }
   async function startRender() {
+    stopSoundPreview();
     if (!prepared || renderState?.running) return;
     let mimeType;
     try { mimeType = selectedMimeType(); }
@@ -387,6 +390,7 @@
       };
       try { if ('wakeLock' in navigator) renderToken.wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
       await audioCtx.resume();
+      audioEngine.start();
       recorder.start(500);
       const startAt = performance.now(); renderToken.startedAt = startAt; const sceneStarts = []; let total = 0;
       story.scenes.forEach(s => { sceneStarts.push(total); total += s.duration; });
@@ -419,56 +423,163 @@
     }
   }
   function createAudioEngineInContext(ctx, moodName, destination) {
-    // A compressor plus a stronger output bus helps the soundtrack stay audible on phones
-    // without letting impacts peak uncontrollably in the exported recording.
+    // A clean, musical tech bed: warm sustained harmony + a gentle timed synth-pluck pattern.
+    // The futuristic mood intentionally avoids sweeping filtered noise and pitch-dropping bleeps,
+    // which can sound watery or like a vacuum on small mobile speakers.
     const master = ctx.createGain(); master.gain.value = .92;
     const compressor = ctx.createDynamicsCompressor();
-    compressor.threshold.value = -17; compressor.knee.value = 18; compressor.ratio.value = 5.5;
-    compressor.attack.value = .004; compressor.release.value = .24;
+    compressor.threshold.value = -18; compressor.knee.value = 18; compressor.ratio.value = 4.5;
+    compressor.attack.value = .006; compressor.release.value = .26;
     master.connect(compressor); compressor.connect(destination);
-    const mood = MOODS[moodName] || MOODS.futuristic; const oscillators = [];
-    if (mood.notes.length) {
-      const filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = mood.filter; filter.Q.value = .65; filter.connect(master);
+
+    const musicBus = ctx.createGain(); musicBus.gain.value = moodName === 'futuristic' ? 1.0 : .92; musicBus.connect(master);
+    const sfxBus = ctx.createGain(); sfxBus.gain.value = 1.0; sfxBus.connect(master);
+    const mood = MOODS[moodName] || MOODS.futuristic;
+    const oscillators = [];
+    let schedulerTimer = null;
+    let nextMusicTime = 0;
+    let musicStep = 0;
+    let futureTranspose = 0;
+
+    // Keep non-futuristic presets as the earlier sustained-pad sound.
+    if (mood.notes.length && moodName !== 'futuristic') {
+      const filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = mood.filter; filter.Q.value = .55; filter.connect(musicBus);
       ['sine', 'triangle', 'sine'].forEach((type, i) => {
-        const osc = ctx.createOscillator(); const gain = ctx.createGain(); osc.type = type; osc.frequency.value = mood.notes[i];
-        gain.gain.value = mood.volume * [.48, .31, .19][i]; osc.connect(gain); gain.connect(filter); osc.start(); oscillators.push({ osc, gain });
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.type = type; osc.frequency.value = mood.notes[i];
+        gain.gain.value = mood.volume * [.52, .27, .18][i];
+        osc.connect(gain); gain.connect(filter); osc.start();
+        oscillators.push({ osc, gain, baseFrequency: mood.notes[i] });
       });
     }
+
+    // Futuristic: warm D-major pad with gentle harmonics, without the watery filter sweep.
+    if (moodName === 'futuristic') {
+      const padFilter = ctx.createBiquadFilter();
+      padFilter.type = 'lowpass'; padFilter.frequency.value = 2850; padFilter.Q.value = .22; padFilter.connect(musicBus);
+      const padNotes = [146.83, 185.00, 220.00, 293.66]; // D, F#, A, D
+      const padTypes = ['sine', 'triangle', 'sine', 'sine'];
+      const padLevels = [.040, .021, .024, .010];
+      padNotes.forEach((frequency, i) => {
+        const osc = ctx.createOscillator(); const gain = ctx.createGain();
+        osc.type = padTypes[i]; osc.frequency.value = frequency;
+        // Very slow, shallow detune adds width without making the sound wobble.
+        osc.detune.value = i === 1 ? -2 : (i === 2 ? 2 : 0);
+        gain.gain.value = padLevels[i]; osc.connect(gain); gain.connect(padFilter); osc.start();
+        oscillators.push({ osc, gain, baseFrequency: frequency });
+      });
+    }
+
     function chord(index, when) {
       if (!oscillators.length) return;
-      const semitones = (moodName === 'tense' ? [0, 1, -1, 0, 2] : [0, 2, 4, 1, 3])[index % 5];
-      oscillators.forEach((o, i) => { o.osc.frequency.cancelScheduledValues(when); o.osc.frequency.setTargetAtTime(mood.notes[i] * Math.pow(2, semitones / 12), when, .5); });
+      // A restrained D → C → G → D harmonic path stays musical rather than randomly detuning.
+      const futureOffsets = [0, -2, 5, 0, 0];
+      const generalOffsets = (moodName === 'tense' ? [0, 1, -1, 0, 2] : [0, 2, 4, 1, 3]);
+      const semitones = (moodName === 'futuristic' ? futureOffsets : generalOffsets)[index % 5];
+      if (moodName === 'futuristic') futureTranspose = semitones;
+      oscillators.forEach((o) => {
+        o.osc.frequency.cancelScheduledValues(when);
+        o.osc.frequency.setTargetAtTime(o.baseFrequency * Math.pow(2, semitones / 12), when, .32);
+      });
     }
+
+    // Pleasant, short synth notes in a major-key pattern: warm and modern, not sharp or bubbly.
+    const futurePattern = [293.66, 0, 440.00, 369.99, 0, 440.00, 329.63, 0, 493.88, 392.00, 0, 493.88];
+    function playFutureNote(frequency, when, velocity = .12) {
+      if (!frequency) return;
+      const osc = ctx.createOscillator(); const overtone = ctx.createOscillator();
+      const toneGain = ctx.createGain(); const overtoneGain = ctx.createGain();
+      const toneFilter = ctx.createBiquadFilter();
+      osc.type = 'triangle'; osc.frequency.setValueAtTime(frequency, when);
+      overtone.type = 'sine'; overtone.frequency.setValueAtTime(frequency * 2, when);
+      toneFilter.type = 'lowpass'; toneFilter.frequency.setValueAtTime(2400, when); toneFilter.Q.value = .28;
+      toneGain.gain.setValueAtTime(.0001, when);
+      toneGain.gain.linearRampToValueAtTime(velocity, when + .022);
+      toneGain.gain.exponentialRampToValueAtTime(.0001, when + .39);
+      overtoneGain.gain.setValueAtTime(.0001, when);
+      overtoneGain.gain.linearRampToValueAtTime(velocity * .19, when + .018);
+      overtoneGain.gain.exponentialRampToValueAtTime(.0001, when + .24);
+      osc.connect(toneFilter); toneFilter.connect(toneGain); toneGain.connect(musicBus);
+      overtone.connect(overtoneGain); overtoneGain.connect(musicBus);
+      osc.start(when); overtone.start(when); osc.stop(when + .42); overtone.stop(when + .27);
+    }
+    function scheduleFutureMusic() {
+      if (moodName !== 'futuristic' || ctx.state === 'closed') return;
+      const horizon = ctx.currentTime + .16;
+      while (nextMusicTime < horizon) {
+        const note = futurePattern[musicStep % futurePattern.length];
+        if (note) playFutureNote(note * Math.pow(2, futureTranspose / 12), nextMusicTime, musicStep % futurePattern.length === 0 ? .145 : .115);
+        nextMusicTime += .46;
+        musicStep++;
+      }
+    }
+    function start() {
+      if (moodName !== 'futuristic' || schedulerTimer !== null) return;
+      nextMusicTime = ctx.currentTime + .06;
+      scheduleFutureMusic();
+      schedulerTimer = setInterval(scheduleFutureMusic, 45);
+    }
+
     function playCue(cueName, when) {
+      // Leave the scene-change whoosh intact: this was the effect that sounded best in testing.
       const cue = normalizeCue(cueName); if (cue === 'soft') return;
       if (cue === 'impact') {
-        // A low thump plus a short mid-frequency click makes the impact audible on small speakers.
         const osc = ctx.createOscillator(), gain = ctx.createGain(), filter = ctx.createBiquadFilter();
         osc.type = 'sine'; osc.frequency.setValueAtTime(125, when); osc.frequency.exponentialRampToValueAtTime(48, when + .36);
         filter.type = 'lowpass'; filter.frequency.value = 260;
         gain.gain.setValueAtTime(.0001, when); gain.gain.exponentialRampToValueAtTime(.31 * mood.cue, when + .018); gain.gain.exponentialRampToValueAtTime(.0001, when + .46);
-        osc.connect(filter); filter.connect(gain); gain.connect(master); osc.start(when); osc.stop(when + .49);
+        osc.connect(filter); filter.connect(gain); gain.connect(sfxBus); osc.start(when); osc.stop(when + .49);
         const n = Math.floor(ctx.sampleRate * .16); const buffer = ctx.createBuffer(1, n, ctx.sampleRate); const values = buffer.getChannelData(0);
         for (let i = 0; i < n; i++) values[i] = (Math.random() * 2 - 1) * (1 - i / n);
         const click = ctx.createBufferSource(), clickFilter = ctx.createBiquadFilter(), clickGain = ctx.createGain(); click.buffer = buffer;
         clickFilter.type = 'bandpass'; clickFilter.frequency.value = 950; clickFilter.Q.value = .85;
         clickGain.gain.setValueAtTime(.16 * mood.cue, when); clickGain.gain.exponentialRampToValueAtTime(.0001, when + .15);
-        click.connect(clickFilter); clickFilter.connect(clickGain); clickGain.connect(master); click.start(when); click.stop(when + .16);
+        click.connect(clickFilter); clickFilter.connect(clickGain); clickGain.connect(sfxBus); click.start(when); click.stop(when + .16);
       } else if (cue === 'whoosh' || cue === 'riser') {
         const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * .72), ctx.sampleRate); const values = buffer.getChannelData(0);
         for (let i = 0; i < values.length; i++) values[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / values.length);
         const source = ctx.createBufferSource(), filter = ctx.createBiquadFilter(), gain = ctx.createGain(); source.buffer = buffer;
         filter.type = 'bandpass'; filter.frequency.setValueAtTime(430, when); filter.frequency.exponentialRampToValueAtTime(cue === 'riser' ? 4200 : 3000, when + .58); filter.Q.value = .55;
         gain.gain.setValueAtTime(.0001, when); gain.gain.linearRampToValueAtTime(.19 * mood.cue, when + .22); gain.gain.exponentialRampToValueAtTime(.0001, when + .7);
-        source.connect(filter); filter.connect(gain); gain.connect(master); source.start(when); source.stop(when + .73);
+        source.connect(filter); filter.connect(gain); gain.connect(sfxBus); source.start(when); source.stop(when + .73);
       } else {
         const osc = ctx.createOscillator(), gain = ctx.createGain(); osc.type = 'triangle';
         osc.frequency.setValueAtTime(740, when); osc.frequency.exponentialRampToValueAtTime(360, when + .13);
         gain.gain.setValueAtTime(.0001, when); gain.gain.exponentialRampToValueAtTime(.13 * mood.cue, when + .01); gain.gain.exponentialRampToValueAtTime(.0001, when + .24);
-        osc.connect(gain); gain.connect(master); osc.start(when); osc.stop(when + .26);
+        osc.connect(gain); gain.connect(sfxBus); osc.start(when); osc.stop(when + .26);
       }
     }
-    return { ctx, chord, playCue, close: () => { oscillators.forEach(o => { try { o.osc.stop(); } catch (_) {} }); return ctx.close(); } };
+    return {
+      ctx, chord, playCue, start,
+      close: () => {
+        if (schedulerTimer !== null) clearInterval(schedulerTimer);
+        oscillators.forEach(o => { try { o.osc.stop(); } catch (_) {} });
+        return ctx.close();
+      }
+    };
+  }
+  function stopSoundPreview() {
+    if (soundPreviewTimeout !== null) clearTimeout(soundPreviewTimeout);
+    soundPreviewTimeout = null;
+    const engine = soundPreviewEngine; soundPreviewEngine = null;
+    if (engine) { try { engine.close().catch(() => {}); } catch (_) {} }
+    if (els.soundPreviewBtn) els.soundPreviewBtn.textContent = '▶ Preview improved futuristic soundtrack + transition';
+  }
+  async function previewSoundDesign() {
+    if (soundPreviewEngine) { stopSoundPreview(); return; }
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) { toast('Audio preview is not supported in this browser.'); return; }
+    try {
+      const ctx = new AudioCtx(); await ctx.resume();
+      const engine = createAudioEngineInContext(ctx, 'futuristic', ctx.destination);
+      soundPreviewEngine = engine; engine.start();
+      const now = ctx.currentTime + .035;
+      engine.chord(0, now); engine.playCue('impact', now + .08); engine.playCue('whoosh', now + 2.45);
+      els.soundPreviewBtn.textContent = '■ Stop sound preview';
+      soundPreviewTimeout = setTimeout(stopSoundPreview, 6500);
+    } catch (error) {
+      stopSoundPreview(); console.error(error); toast('Could not play the audio preview. Tap again or check your phone volume.');
+    }
   }
   function cancelRender() {
     if (!renderState || !renderState.running) return;
@@ -521,11 +632,13 @@
   els.input.addEventListener('input', updateCharCount);
   els.sampleBtn.addEventListener('click', loadSample);
   els.prepareBtn.addEventListener('click', prepare);
+  els.soundPreviewBtn.addEventListener('click', previewSoundDesign);
   els.renderBtn.addEventListener('click', startRender);
   els.cancelBtn.addEventListener('click', cancelRender);
   els.downloadBtn.addEventListener('click', downloadVideo);
   els.shareBtn.addEventListener('click', shareVideo);
   els.newVideoBtn.addEventListener('click', () => { cancelRender(); prepared = null; currentBlob = null; if (currentUrl) URL.revokeObjectURL(currentUrl); currentUrl = null; els.renderPanel.hidden = true; els.previewPanel.hidden = true; els.input.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  window.addEventListener('pagehide', stopSoundPreview);
   window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferredInstallPrompt = event; els.installBtn.hidden = false; });
   els.installBtn.addEventListener('click', async () => {
     if (!deferredInstallPrompt) { toast('On iPhone: use Share → Add to Home Screen. On Android: open the browser menu → Install app.'); return; }
