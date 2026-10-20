@@ -41,7 +41,7 @@
         <div class="field-row">
           <div class="field"><label for="themeSelect">Visual style</label><select id="themeSelect"><option value="tech">WireUnWired / Tech</option><option value="breaking">Breaking news</option><option value="business">Business brief</option><option value="science">Science / future</option></select></div>
           <div class="field"><label for="musicSelect">Music mood</label><select id="musicSelect"><option value="auto">Use script mood</option><option value="cinematic">Cinematic</option><option value="soft">Soft & thoughtful</option><option value="tense">Tense / urgent</option><option value="futuristic">Futuristic</option><option value="hopeful">Hopeful</option><option value="none">No background music</option></select></div>
-          <div class="field"><label for="readerPaceSelect">Reading pace</label><select id="readerPaceSelect"><option value="normal" selected>Comfortable · 115 WPM</option><option value="relaxed">Relaxed · 100 WPM</option><option value="fast">Fast · 145 WPM</option></select></div>
+          <div class="field"><label for="readerPaceSelect">Text reveal speed</label><select id="readerPaceSelect"><option value="normal" selected>Standard typing</option><option value="relaxed">Slow typing</option><option value="fast">Fast typing</option></select></div>
         </div>
         <div class="audio-mixer" aria-labelledby="audioMixerHeading">
           <div class="audio-mixer-heading"><div><div class="setting-label">AUDIO MIXER</div><h3 id="audioMixerHeading">Tune the sound in real time</h3></div><span class="live-mix-chip">LIVE PREVIEW</span></div>
@@ -69,7 +69,7 @@
         </div>
         <div class="story-summary"><div class="summary-kicker">STORY TITLE</div><div id="storyTitle" class="story-title"></div><div id="storyCategory" class="story-category"></div></div>
         <div id="sceneList" class="scene-list"></div>
-        <p class="tiny-note pacing-note">Each slide types on, then stays visible for a reading window. Long text is split into continuation slides rather than clipped. Estimated timings use your selected reading pace.</p>
+        <p class="tiny-note pacing-note">Each slide types on, then stays for exactly 4.5 seconds after the final character appears. Long text is split into continuation slides rather than clipped. Change the typing speed without changing that final reading window.</p>
         <div class="render-settings"><div><span class="setting-label">FORMAT</span><strong>Portrait · 9:16</strong></div><div><span class="setting-label">SOCIAL EXPORT</span><strong>MP4 conversion available</strong></div><div><span class="setting-label">VOICEOVER</span><strong>Off</strong></div></div>
         <button id="renderBtn" class="primary-button render-button"><span>Render video</span><span class="button-arrow">↗</span></button>
         <p class="tiny-note">Keep this page open while rendering. Video and audio are generated locally in your browser.</p>

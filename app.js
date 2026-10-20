@@ -16,11 +16,11 @@
     source_url: 'https://wireunwired.com/',
     music_mood: 'futuristic',
     scenes: [
-      { headline: 'AI is moving beyond chat', body: 'The next chapter is about systems that can plan, use tools and take action.', duration_sec: 5, audio_cue: 'impact', visual_direction: 'A glowing network expanding across a dark digital grid.' },
-      { headline: 'From answers to actions', body: 'AI products are increasingly being designed to complete multi-step tasks, not only respond to prompts.', duration_sec: 6, audio_cue: 'whoosh', visual_direction: 'Connected nodes and progress lines.' },
-      { headline: 'The details matter', body: 'Reliability, permissions and human oversight remain important as these systems gain more autonomy.', duration_sec: 6, audio_cue: 'pulse', visual_direction: 'A sequence of three precise data panels.' },
-      { headline: 'What comes next?', body: 'The most useful tools may be the ones that turn complex work into clear, verifiable steps.', duration_sec: 6, audio_cue: 'soft', visual_direction: 'A bright signal emerging from a calm field of data.' },
-      { headline: 'Follow the signal', body: 'More technology stories and context at WireUnWired.', duration_sec: 5, audio_cue: 'impact', visual_direction: 'Minimal branded end card.' }
+      { headline: 'AI is moving beyond chat', body: 'The next chapter is about systems that can plan, use tools and take action.', audio_cue: 'impact', visual_direction: 'A glowing network expanding across a dark digital grid.' },
+      { headline: 'From answers to actions', body: 'AI products are increasingly being designed to complete multi-step tasks, not only respond to prompts.', audio_cue: 'whoosh', visual_direction: 'Connected nodes and progress lines.' },
+      { headline: 'The details matter', body: 'Reliability, permissions and human oversight remain important as these systems gain more autonomy.', audio_cue: 'pulse', visual_direction: 'A sequence of three precise data panels.' },
+      { headline: 'What comes next?', body: 'The most useful tools may be the ones that turn complex work into clear, verifiable steps.', audio_cue: 'soft', visual_direction: 'A bright signal emerging from a calm field of data.' },
+      { headline: 'Follow the signal', body: 'More technology stories and context at WireUnWired.', audio_cue: 'impact', visual_direction: 'Minimal branded end card.' }
     ]
   };
   const THEMES = {
@@ -77,16 +77,15 @@
     if (/riser|build|tension/.test(cue)) return 'riser';
     return 'pulse';
   }
-  function countWords(text) {
-    const clean = String(text || '').trim();
-    return clean ? clean.split(/\s+/).filter(Boolean).length : 0;
-  }
-  function readerWordsPerMinute() {
+  // This control adjusts how quickly text is revealed, not how long it remains
+  // after completion. Every scene gets the same fixed post-reveal reading window.
+  function textRevealRates() {
     const pace = els.readerPaceSelect ? els.readerPaceSelect.value : 'normal';
-    if (pace === 'relaxed') return 100;
-    if (pace === 'fast') return 145;
-    return 115;
+    if (pace === 'relaxed') return { headline: 18, body: 24, label: 'slow reveal' };
+    if (pace === 'fast') return { headline: 30, body: 40, label: 'fast reveal' };
+    return { headline: 24, body: 32, label: 'standard reveal' };
   }
+  const POST_REVEAL_HOLD_SECONDS = 4.5;
   function selectedAudioLevels() {
     return {
       music: clampNumber(Number(els.musicLevel?.value ?? 70) / 100, 0, 1.5),
@@ -164,15 +163,12 @@
         body = [rest.join(' '), body].filter(Boolean).join(' ');
       }
     }
-    let requestedDuration = Number(s.duration_sec ?? s.duration ?? s.seconds ?? 5);
-    if (!Number.isFinite(requestedDuration)) requestedDuration = 5;
-    requestedDuration = clampNumber(requestedDuration, 2, 180);
-    const timingMode = String(s.timing_mode || s.duration_mode || '').toLowerCase();
+    // Legacy duration_sec / timing_mode fields are accepted in the input JSON for
+    // compatibility, but the studio now owns scene timing so every scene follows
+    // the same fixed post-reveal reading-window rule.
     return {
       headline,
       body,
-      requestedDuration,
-      fixedTiming: timingMode === 'fixed' || timingMode === 'manual',
       audioCue: normalizeCue(s.audio_cue || s.audioCue || s.sound_effect || s.cue || ''),
       visualDirection: escapeText(s.visual_direction || s.visualDirection || s.visual || s.visual_prompt || ''),
       imageUrl: safeUrl(s.image_url || s.imageUrl || s.image || s.thumbnail_url || '')
@@ -205,27 +201,25 @@
     return `Continued · ${short}`;
   }
   function timeScene(headline, body, base, partIndex, partCount) {
-    const wpm = readerWordsPerMinute();
-    // The renderer types characters at a fixed, readable pace. These durations are
-    // not capped; long text is split into multiple scenes before timing is applied.
-    const headlineTypingDuration = Math.max(0.9, headline.length / 24);
-    const bodyTypingDuration = body ? Math.max(0.65, body.length / 32) : 0;
-    const totalReadableWords = countWords(headline) + countWords(body);
-    const punctuationMarks = (headline + ' ' + body).match(/[,.!?;:]/g)?.length || 0;
-    const naturalPauses = Math.min(4.5, punctuationMarks * 0.20);
-    const readingHoldDuration = (totalReadableWords / (wpm / 60)) + naturalPauses + 3.5;
-    const minimumReadableDuration = headlineTypingDuration + 0.42 + bodyTypingDuration + readingHoldDuration + 1.1;
-    const duration = base.fixedTiming && partCount === 1
-      ? base.requestedDuration
-      : Math.max(base.requestedDuration, minimumReadableDuration);
+    const revealRates = textRevealRates();
+    // Text is revealed first. As soon as the final character appears, the scene
+    // holds for exactly 4.5 seconds, then transitions. Do not add another word-count
+    // reading delay after that point; long copy is handled by continuation slides.
+    const headlineTypingDuration = Math.max(0.9, headline.length / revealRates.headline);
+    const bodyTypingDuration = body ? Math.max(0.65, body.length / revealRates.body) : 0;
+    const bodyDelay = headlineTypingDuration + 0.28;
+    const textFullyVisibleAt = body ? bodyDelay + bodyTypingDuration : headlineTypingDuration;
+    const readingHoldDuration = POST_REVEAL_HOLD_SECONDS;
+    const duration = textFullyVisibleAt + readingHoldDuration;
     return {
       headline, body, duration,
       headlineTypingDuration,
-      bodyDelay: headlineTypingDuration + 0.28,
+      bodyDelay,
       bodyTypingDuration,
+      textFullyVisibleAt,
       readingHoldDuration,
-      readWpm: wpm,
-      autoTimed: !(base.fixedTiming && partCount === 1),
+      revealPace: revealRates.label,
+      autoTimed: true,
       audioCue: base.audioCue,
       visualDirection: base.visualDirection,
       imageUrl: base.imageUrl,
@@ -276,10 +270,10 @@
       const text = part.replace(/^[-*#\d.)\s]+/, '').trim();
       const firstClause = text.split(/[,;:.!?]/)[0].trim();
       const headline = firstClause.length >= 16 && firstClause.length <= 72 ? firstClause : (i === 0 ? 'Here is what happened' : `What to know · ${i + 1}`);
-      return { headline, body: text, duration_sec: 5, audio_cue: i === 0 ? 'impact' : (i === segments.length - 1 ? 'soft' : 'whoosh') };
+      return { headline, body: text, audio_cue: i === 0 ? 'impact' : (i === segments.length - 1 ? 'soft' : 'whoosh') };
     });
-    scenes.unshift({ headline: title, body: 'The story, the key detail and why it matters.', duration_sec: 4, audio_cue: 'impact' });
-    scenes.push({ headline: 'Follow the signal', body: 'More context and technology stories at WireUnWired.', duration_sec: 4, audio_cue: 'soft' });
+    scenes.unshift({ headline: title, body: 'The story, the key detail and why it matters.', audio_cue: 'impact' });
+    scenes.push({ headline: 'Follow the signal', body: 'More context and technology stories at WireUnWired.', audio_cue: 'soft' });
     return { title, category: 'WIREUNWIRED NEWS', scenes, music_mood: 'futuristic' };
   }
   function parseInput(raw) {
@@ -334,7 +328,7 @@
       const visual = document.createElement('span'); visual.textContent = scene.imageUrl ? 'IMAGE' : 'MOTION GRAPHIC';
       if (scene.continuationPart) { const continuation = document.createElement('span'); continuation.textContent = 'CONTINUED'; tags.append(continuation); }
       tags.append(cue, visual); main.append(title, body, tags);
-      const duration = document.createElement('div'); duration.className = 'scene-duration'; duration.textContent = `${scene.duration.toFixed(1)} sec\nreadable`; duration.title = `Includes type-on animation and a reading window at ${scene.readWpm} words per minute`; 
+      const duration = document.createElement('div'); duration.className = 'scene-duration'; duration.textContent = `${scene.duration.toFixed(1)} sec\n+ 4.5s hold`; duration.title = `Text reveal (${scene.revealPace}); then exactly ${scene.readingHoldDuration.toFixed(1)} seconds after all text is visible`; 
       card.append(number, main, duration); els.sceneList.append(card);
     });
     const total = story.scenes.reduce((sum, s) => sum + s.duration, 0);

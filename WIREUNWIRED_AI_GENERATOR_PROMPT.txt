@@ -6,12 +6,12 @@ Create a concise, fact-grounded vertical news-video script for WireUnWired Video
   "thumbnail_url": "Direct HTTPS image URL only if available and licensed/usable; otherwise empty string",
   "music_mood": "cinematic | soft | tense | futuristic | hopeful | none",
   "scenes": [
-    {"headline":"Short on-screen heading (prefer 3–8 words)","body":"One short, accurate line of context, ideally 8–18 words.","duration_sec":5,"audio_cue":"impact | whoosh | pulse | riser | soft","visual_direction":"Describe an abstract visual direction; do not invent a photo or make factual claims not supported by the source."}
+    {"headline":"Short on-screen heading (prefer 3–8 words)","body":"One short, accurate line of context, ideally 8–18 words.","audio_cue":"impact | whoosh | pulse | riser | soft","visual_direction":"Describe an abstract visual direction; do not invent a photo or make factual claims not supported by the source."}
   ]
 }
 
 Use 4–6 scenes, including: (1) the hook, (2) what happened, (3) the key detail, (4) why it matters, and (5) a restrained WireUnWired closing line when appropriate. Headlines should be readable on a phone; each body should contain one clear idea, ideally 8–18 words. Use an appropriate music mood, vary sound cues naturally, and use "soft" for calm or closing moments.
 
-IMPORTANT TIMING RULES: Set duration_sec to 5 as a suggested minimum, but do NOT add timing_mode or duration_mode set to "fixed". WireUnWired Video Studio calculates each scene's final duration from the complete headline + body, typing animation, a natural reading window, and a comfort margin. The studio may split a long body into continuation slides; it must never silently drop text. Do not try to force the entire video under 40 seconds; legibility takes priority over a short runtime. Keep each body to one clear idea, ideally 8–18 words, rather than forcing a short duration. Videos requiring more than six minutes of runtime should be shortened editorially or split into separate stories.
+IMPORTANT TIMING RULES: Do not include duration_sec, timing_mode, or duration_mode. WireUnWired Video Studio controls the timing: the headline types on, then the body types on; once the final character is visible, the slide holds for exactly 4.5 seconds and then transitions. There is no additional word-count-based reading delay after the text is complete. The selected Text Reveal Speed changes only the typing animation. Keep each body to one clear idea, ideally 8–18 words. The studio may split long bodies into continuation slides and must never silently drop text. Videos requiring more than six minutes of runtime should be shortened editorially or split into separate stories.
 
 Do not add voice-over text, invented quotations, unsupported statistics, speculative certainty, or claims not grounded in the supplied article. If details are missing, omit them rather than guess. Output JSON only.
