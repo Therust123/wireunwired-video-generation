@@ -25,7 +25,7 @@
       <section class="hero">
         <div class="eyebrow"><span class="eyebrow-dot"></span> YOUR PERSONAL VIDEO DESK</div>
         <h1>From story<br><span>to screen.</span></h1>
-        <p>Paste the script your WireUnWired AI Generator creates. This studio handles the scenes, motion, music and sound design.</p>
+        <p>Paste your WireUnWired AI Generator script. The studio calculates reader-friendly timing, animates the scenes and mixes audio locally.</p>
         <div class="hero-pills"><span>NO AI VOICE</span><span>LOCAL RENDERING</span><span>NO UPLOADS</span></div>
       </section>
 
@@ -41,8 +41,23 @@
         <div class="field-row">
           <div class="field"><label for="themeSelect">Visual style</label><select id="themeSelect"><option value="tech">WireUnWired / Tech</option><option value="breaking">Breaking news</option><option value="business">Business brief</option><option value="science">Science / future</option></select></div>
           <div class="field"><label for="musicSelect">Music mood</label><select id="musicSelect"><option value="auto">Use script mood</option><option value="cinematic">Cinematic</option><option value="soft">Soft & thoughtful</option><option value="tense">Tense / urgent</option><option value="futuristic">Futuristic</option><option value="hopeful">Hopeful</option><option value="none">No background music</option></select></div>
+          <div class="field"><label for="readerPaceSelect">Reading pace</label><select id="readerPaceSelect"><option value="normal" selected>Comfortable · 115 WPM</option><option value="relaxed">Relaxed · 100 WPM</option><option value="fast">Fast · 145 WPM</option></select></div>
         </div>
-        <button id="soundPreviewBtn" type="button" class="text-button sound-preview-button">▶ Preview improved futuristic soundtrack + transition</button>
+        <div class="audio-mixer" aria-labelledby="audioMixerHeading">
+          <div class="audio-mixer-heading"><div><div class="setting-label">AUDIO MIXER</div><h3 id="audioMixerHeading">Tune the sound in real time</h3></div><span class="live-mix-chip">LIVE PREVIEW</span></div>
+          <div class="audio-slider-row"><div class="audio-slider-label"><label for="musicLevel">Background music</label><output id="musicLevelValue" for="musicLevel">70%</output></div><input id="musicLevel" type="range" min="0" max="150" step="5" value="70"><div class="audio-slider-hint">Soft bed under the whole story</div></div>
+          <div class="audio-slider-row"><div class="audio-slider-label"><label for="effectsLevel">Sound effects</label><output id="effectsLevelValue" for="effectsLevel">100%</output></div><input id="effectsLevel" type="range" min="0" max="150" step="5" value="100"><div class="audio-slider-hint">Opening impact and scene transitions</div></div>
+          <div class="audio-slider-row"><div class="audio-slider-label"><label for="masterLevel">Master volume</label><output id="masterLevelValue" for="masterLevel">100%</output></div><input id="masterLevel" type="range" min="50" max="150" step="5" value="100"><div class="audio-slider-hint">Overall output level, with peak limiting</div></div>
+          <p class="tiny-note">Move any slider while preview is playing. The same levels are applied to the rendered video.</p>
+        </div>
+        <div class="audio-assets">
+          <div class="audio-mixer-heading"><div><div class="setting-label">OPTIONAL AUDIO FILES</div><h3>Use your own licensed audio</h3></div></div>
+          <div class="audio-asset-row"><label for="musicFile">Background soundtrack <span>MP3, WAV, M4A, OGG</span></label><input id="musicFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac"><div class="audio-file-row"><div id="musicFileName" class="audio-file-name">Built-in generated music</div><button id="clearMusicFileBtn" type="button" class="audio-clear-button" hidden>Use generated music</button></div></div>
+          <div class="audio-asset-row"><label for="sfxFile">Short transition / impact effect <span>Best: 0.2–2 seconds</span></label><input id="sfxFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac,.flac"><div class="audio-file-row"><div id="sfxFileName" class="audio-file-name">Built-in generated effects</div><button id="clearSfxFileBtn" type="button" class="audio-clear-button" hidden>Use generated effects</button></div></div>
+          <p class="tiny-note">Files stay on this device. Choose audio you have permission to use. An uploaded soundtrack replaces the generated music; an uploaded effect replaces the generated scene effect.</p>
+          <div class="audio-library-links"><span>Find audio:</span><a href="https://pixabay.com/music/" target="_blank" rel="noopener noreferrer">Music library</a><a href="https://pixabay.com/sound-effects/" target="_blank" rel="noopener noreferrer">Sound effects</a><a href="https://mixkit.co/free-stock-music/" target="_blank" rel="noopener noreferrer">Mixkit music</a></div>
+        </div>
+        <button id="soundPreviewBtn" type="button" class="text-button sound-preview-button">▶ Preview current mix + transitions</button>
         <button id="prepareBtn" class="primary-button"><span>Prepare video</span><span class="button-arrow">→</span></button>
         <div id="inputMessage" class="inline-message" role="status" aria-live="polite"></div>
       </section>
@@ -54,6 +69,7 @@
         </div>
         <div class="story-summary"><div class="summary-kicker">STORY TITLE</div><div id="storyTitle" class="story-title"></div><div id="storyCategory" class="story-category"></div></div>
         <div id="sceneList" class="scene-list"></div>
+        <p class="tiny-note pacing-note">Each slide types on, then stays visible for a reading window. Long text is split into continuation slides rather than clipped. Estimated timings use your selected reading pace.</p>
         <div class="render-settings"><div><span class="setting-label">FORMAT</span><strong>Portrait · 9:16</strong></div><div><span class="setting-label">SOCIAL EXPORT</span><strong>MP4 conversion available</strong></div><div><span class="setting-label">VOICEOVER</span><strong>Off</strong></div></div>
         <button id="renderBtn" class="primary-button render-button"><span>Render video</span><span class="button-arrow">↗</span></button>
         <p class="tiny-note">Keep this page open while rendering. Video and audio are generated locally in your browser.</p>
@@ -68,7 +84,7 @@
         <button id="cancelBtn" class="text-button cancel-button" hidden>Cancel render</button>
       </section>
 
-      <section class="tips-row"><div class="tip-icon">✦</div><div><strong>Better scripts make better videos.</strong><p>Use 4–6 scenes, short headlines and one clear fact per scene. This version adds motion and generated audio, not spoken narration.</p></div></section>
+      <section class="tips-row"><div class="tip-icon">✦</div><div><strong>Better scripts make better videos.</strong><p>Use 4–6 source scenes and one clear idea per scene. Long copy is split, not silently dropped. You can upload audio you are licensed to use; otherwise the built-in generated soundtrack/effects remain available.</p></div></section>
     </main>
     <footer><span>WIREUNWIRED VIDEO STUDIO</span><span>BUILT FOR STORIES THAT MOVE</span></footer>
   </div>

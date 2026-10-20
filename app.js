@@ -3,7 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const els = {
     input: $('scriptInput'), charCount: $('charCount'), sampleBtn: $('sampleBtn'), prepareBtn: $('prepareBtn'),
-    inputMessage: $('inputMessage'), themeSelect: $('themeSelect'), musicSelect: $('musicSelect'), soundPreviewBtn: $('soundPreviewBtn'), previewPanel: $('previewPanel'),
+    inputMessage: $('inputMessage'), themeSelect: $('themeSelect'), musicSelect: $('musicSelect'), readerPaceSelect: $('readerPaceSelect'), musicLevel: $('musicLevel'), musicLevelValue: $('musicLevelValue'), effectsLevel: $('effectsLevel'), effectsLevelValue: $('effectsLevelValue'), masterLevel: $('masterLevel'), masterLevelValue: $('masterLevelValue'), musicFile: $('musicFile'), musicFileName: $('musicFileName'), clearMusicFileBtn: $('clearMusicFileBtn'), sfxFile: $('sfxFile'), sfxFileName: $('sfxFileName'), clearSfxFileBtn: $('clearSfxFileBtn'), soundPreviewBtn: $('soundPreviewBtn'), previewPanel: $('previewPanel'),
     storyTitle: $('storyTitle'), storyCategory: $('storyCategory'), sceneCount: $('sceneCount'), sceneList: $('sceneList'),
     renderBtn: $('renderBtn'), renderPanel: $('renderPanel'), canvas: $('videoCanvas'), renderStatus: $('renderStatus'),
     progressLabel: $('progressLabel'), timeLabel: $('timeLabel'), progressBar: $('progressBar'), renderMessage: $('renderMessage'),
@@ -41,6 +41,7 @@
   let prepared = null;
   let currentBlob = null;
   let originalBlob = null;
+  let optimizedMp4 = false;
   let currentUrl = null;
   let ffmpegScriptPromise = null;
   let ffmpegInstance = null;
@@ -49,6 +50,7 @@
   let renderState = null;
   let soundPreviewEngine = null;
   let soundPreviewTimeout = null;
+  let audioAssetFiles = { music: null, sfx: null };
   let toastTimer = null;
 
   function showMessage(target, message, type = '') {
@@ -75,20 +77,167 @@
     if (/riser|build|tension/.test(cue)) return 'riser';
     return 'pulse';
   }
+  function countWords(text) {
+    const clean = String(text || '').trim();
+    return clean ? clean.split(/\s+/).filter(Boolean).length : 0;
+  }
+  function readerWordsPerMinute() {
+    const pace = els.readerPaceSelect ? els.readerPaceSelect.value : 'normal';
+    if (pace === 'relaxed') return 100;
+    if (pace === 'fast') return 145;
+    return 115;
+  }
+  function selectedAudioLevels() {
+    return {
+      music: clampNumber(Number(els.musicLevel?.value ?? 70) / 100, 0, 1.5),
+      effects: clampNumber(Number(els.effectsLevel?.value ?? 100) / 100, 0, 1.5),
+      master: clampNumber(Number(els.masterLevel?.value ?? 100) / 100, 0.5, 1.5)
+    };
+  }
+  function updateAudioLevelLabels() {
+    [['musicLevel', 'musicLevelValue'], ['effectsLevel', 'effectsLevelValue'], ['masterLevel', 'masterLevelValue']].forEach(([inputId, outputId]) => {
+      const input = $(inputId), output = $(outputId);
+      if (input && output) output.textContent = `${input.value}%`;
+    });
+  }
+  async function readAudioAssetFile(kind, file) {
+    if (!file) { audioAssetFiles[kind] = null; updateAudioAssetLabel(kind); return; }
+    if (file.size > 25 * 1024 * 1024) {
+      const input = kind === 'music' ? els.musicFile : els.sfxFile;
+      if (input) input.value = '';
+      showMessage(els.inputMessage, 'Choose an audio file smaller than 25 MB so it can be decoded reliably on a phone.', 'error');
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      audioAssetFiles[kind] = { name: file.name, type: file.type || 'application/octet-stream', bytes };
+      updateAudioAssetLabel(kind);
+      stopSoundPreview();
+      showMessage(els.inputMessage, `${kind === 'music' ? 'Background soundtrack' : 'Transition effect'} loaded locally: ${file.name}. Preview the mix before rendering.`, 'success');
+    } catch (error) {
+      audioAssetFiles[kind] = null;
+      showMessage(els.inputMessage, `Could not read that audio file. Try an MP3 or WAV. ${error.message || ''}`, 'error');
+    }
+  }
+  function updateAudioAssetLabel(kind) {
+    const target = kind === 'music' ? els.musicFileName : els.sfxFileName;
+    if (!target) return;
+    target.textContent = audioAssetFiles[kind]
+      ? `Loaded locally · ${audioAssetFiles[kind].name}`
+      : (kind === 'music' ? 'Built-in generated music' : 'Built-in generated effects');
+    const clearButton = kind === 'music' ? els.clearMusicFileBtn : els.clearSfxFileBtn;
+    if (clearButton) clearButton.hidden = !audioAssetFiles[kind];
+  }
+  async function decodeAudioAssets(ctx) {
+    const decoded = { music: null, sfx: null };
+    for (const kind of ['music', 'sfx']) {
+      const asset = audioAssetFiles[kind];
+      if (!asset) continue;
+      try {
+        decoded[kind] = await ctx.decodeAudioData(asset.bytes.slice().buffer);
+      } catch (error) {
+        throw new Error(`The uploaded ${kind === 'music' ? 'soundtrack' : 'effect'} could not be decoded by this browser. Try a standard MP3 or WAV file. (${error.message || 'unsupported audio format'})`);
+      }
+    }
+    return decoded;
+  }
+  function clampNumber(value, min, max) { return Math.max(min, Math.min(max, value)); }
   function normalizeScene(scene, index) {
     const s = typeof scene === 'string' ? { body: scene } : (scene || {});
-    const headline = cleanTitle(s.headline || s.title || s.heading || s.text || `Key detail ${index + 1}`, `Key detail ${index + 1}`);
-    const body = escapeText(s.body || s.subtitle || s.description || s.narration || s.copy || (s.text && s.text !== headline ? s.text : ''))
-      .replace(/[<>\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, 420);
-    let duration = Number(s.duration_sec ?? s.duration ?? s.seconds ?? 5);
-    if (!Number.isFinite(duration)) duration = 5;
-    duration = Math.max(3, Math.min(12, duration));
+    let headline = escapeText(s.headline || s.title || s.heading || s.text || `Key detail ${index + 1}`)
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '') || `Key detail ${index + 1}`;
+    let body = escapeText(s.body || s.subtitle || s.description || s.narration || s.copy || (s.text && s.text !== headline ? s.text : ''))
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
+
+    // Keep headline typography readable without losing any source text: move any
+    // overflow from an oversized heading into the body, where it will be split safely.
+    if (headline.length > 72) {
+      const words = headline.split(/\s+/);
+      let first = [];
+      let rest = [];
+      for (const word of words) {
+        if (!rest.length && (first.join(' ').length + word.length + (first.length ? 1 : 0)) <= 66) first.push(word);
+        else rest.push(word);
+      }
+      if (first.length && rest.length) {
+        headline = first.join(' ');
+        body = [rest.join(' '), body].filter(Boolean).join(' ');
+      }
+    }
+    let requestedDuration = Number(s.duration_sec ?? s.duration ?? s.seconds ?? 5);
+    if (!Number.isFinite(requestedDuration)) requestedDuration = 5;
+    requestedDuration = clampNumber(requestedDuration, 2, 180);
+    const timingMode = String(s.timing_mode || s.duration_mode || '').toLowerCase();
     return {
-      headline, body, duration,
+      headline,
+      body,
+      requestedDuration,
+      fixedTiming: timingMode === 'fixed' || timingMode === 'manual',
       audioCue: normalizeCue(s.audio_cue || s.audioCue || s.sound_effect || s.cue || ''),
-      visualDirection: escapeText(s.visual_direction || s.visualDirection || s.visual || s.visual_prompt || '').slice(0, 350),
+      visualDirection: escapeText(s.visual_direction || s.visualDirection || s.visual || s.visual_prompt || ''),
       imageUrl: safeUrl(s.image_url || s.imageUrl || s.image || s.thumbnail_url || '')
     };
+  }
+  function chunkBodyText(text, maxWords = 24, maxChars = 190) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [''];
+    const words = clean.split(' ');
+    const chunks = [];
+    let current = [];
+    let length = 0;
+    for (const word of words) {
+      const extra = word.length + (current.length ? 1 : 0);
+      if (current.length && (current.length >= maxWords || length + extra > maxChars)) {
+        chunks.push(current.join(' '));
+        current = [];
+        length = 0;
+      }
+      // An unusually long token is kept whole instead of being silently discarded.
+      current.push(word);
+      length += word.length + (current.length > 1 ? 1 : 0);
+    }
+    if (current.length) chunks.push(current.join(' '));
+    return chunks;
+  }
+  function continuationHeadline(headline, partNumber) {
+    const clean = String(headline || 'Key detail').trim();
+    const short = clean.length > 48 ? `${clean.slice(0, 45).replace(/\s+\S*$/, '')}…` : clean;
+    return `Continued · ${short}`;
+  }
+  function timeScene(headline, body, base, partIndex, partCount) {
+    const wpm = readerWordsPerMinute();
+    // The renderer types characters at a fixed, readable pace. These durations are
+    // not capped; long text is split into multiple scenes before timing is applied.
+    const headlineTypingDuration = Math.max(0.9, headline.length / 24);
+    const bodyTypingDuration = body ? Math.max(0.65, body.length / 32) : 0;
+    const totalReadableWords = countWords(headline) + countWords(body);
+    const punctuationMarks = (headline + ' ' + body).match(/[,.!?;:]/g)?.length || 0;
+    const naturalPauses = Math.min(4.5, punctuationMarks * 0.20);
+    const readingHoldDuration = (totalReadableWords / (wpm / 60)) + naturalPauses + 3.5;
+    const minimumReadableDuration = headlineTypingDuration + 0.42 + bodyTypingDuration + readingHoldDuration + 1.1;
+    const duration = base.fixedTiming && partCount === 1
+      ? base.requestedDuration
+      : Math.max(base.requestedDuration, minimumReadableDuration);
+    return {
+      headline, body, duration,
+      headlineTypingDuration,
+      bodyDelay: headlineTypingDuration + 0.28,
+      bodyTypingDuration,
+      readingHoldDuration,
+      readWpm: wpm,
+      autoTimed: !(base.fixedTiming && partCount === 1),
+      audioCue: base.audioCue,
+      visualDirection: base.visualDirection,
+      imageUrl: base.imageUrl,
+      continuationPart: partIndex > 0
+    };
+  }
+  function expandAndTimeScene(base) {
+    const chunks = chunkBodyText(base.body);
+    return chunks.map((body, index) => {
+      const headline = index === 0 ? base.headline : continuationHeadline(base.headline, index + 1);
+      return timeScene(headline, body, base, index, chunks.length);
+    });
   }
   function safeUrl(maybeUrl) {
     if (typeof maybeUrl !== 'string' || !maybeUrl.trim()) return '';
@@ -123,7 +272,7 @@
     if (contentBlocks.length >= 3 && contentBlocks.length <= 8) segments = contentBlocks;
     else segments = sentenceChunks(combined || title, 5);
     if (!segments.length) segments = [title];
-    const scenes = segments.slice(0, 7).map((part, i) => {
+    const scenes = segments.map((part, i) => {
       const text = part.replace(/^[-*#\d.)\s]+/, '').trim();
       const firstClause = text.split(/[,;:.!?]/)[0].trim();
       const headline = firstClause.length >= 16 && firstClause.length <= 72 ? firstClause : (i === 0 ? 'Here is what happened' : `What to know · ${i + 1}`);
@@ -155,10 +304,13 @@
       data = plainTextToStory(text);
     }
     if (!Array.isArray(data.scenes) || data.scenes.length === 0) throw new Error('Could not find any scenes in the pasted script.');
-    const scenes = data.scenes.slice(0, 10).map(normalizeScene);
+    if (data.scenes.length > 18) throw new Error(`This script contains ${data.scenes.length} source scenes. Keep the input to 18 or fewer scenes; long bodies will be split automatically without losing text.`);
+    const sourceScenes = data.scenes.map(normalizeScene);
+    const scenes = sourceScenes.flatMap(expandAndTimeScene);
     if (!scenes.length) throw new Error('Add at least one scene to the script.');
+    if (scenes.length > 24) throw new Error(`This story needs ${scenes.length} slides after splitting long text. Shorten the script or make each source scene more focused; no content has been silently discarded.`);
     const total = scenes.reduce((sum, s) => sum + s.duration, 0);
-    if (total > 90) throw new Error('This first version is designed for videos up to 90 seconds. Reduce scene durations or use fewer scenes.');
+    if (total > 360) throw new Error(`This script needs about ${Math.ceil(total / 60)} minutes at the selected reading pace. For reliable local rendering on a phone, split it into shorter videos; no content has been silently discarded.`);
     const category = cleanTitle(data.category || data.topic || 'WIREUNWIRED NEWS', 'WIREUNWIRED NEWS').toUpperCase().slice(0, 42);
     return {
       title: cleanTitle(data.title || data.headline || data.story_title || scenes[0].headline),
@@ -180,12 +332,13 @@
       const tags = document.createElement('div'); tags.className = 'scene-tags';
       const cue = document.createElement('span'); cue.textContent = `SFX · ${scene.audioCue.toUpperCase()}`;
       const visual = document.createElement('span'); visual.textContent = scene.imageUrl ? 'IMAGE' : 'MOTION GRAPHIC';
+      if (scene.continuationPart) { const continuation = document.createElement('span'); continuation.textContent = 'CONTINUED'; tags.append(continuation); }
       tags.append(cue, visual); main.append(title, body, tags);
-      const duration = document.createElement('div'); duration.className = 'scene-duration'; duration.textContent = `${scene.duration.toFixed(0)} sec`;
+      const duration = document.createElement('div'); duration.className = 'scene-duration'; duration.textContent = `${scene.duration.toFixed(1)} sec\nreadable`; duration.title = `Includes type-on animation and a reading window at ${scene.readWpm} words per minute`; 
       card.append(number, main, duration); els.sceneList.append(card);
     });
     const total = story.scenes.reduce((sum, s) => sum + s.duration, 0);
-    els.sceneCount.textContent = `${story.scenes.length} SLIDES · ${Math.round(total)} SEC`;
+    els.sceneCount.textContent = `${story.scenes.length} SLIDES · ${Math.ceil(total)} SEC`;
     els.storyTitle.textContent = story.title;
     els.storyCategory.textContent = story.category;
   }
@@ -194,19 +347,35 @@
     return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
   }
   function wrapText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 5, revealCount = Infinity, showCursor = false, cursorTime = 0) {
-    const words = String(text || '').split(/\s+/).filter(Boolean); const lines = []; let line = '';
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = '';
+    const splitLongWord = (word) => {
+      const parts = [];
+      let part = '';
+      for (const character of word) {
+        if (part && ctx.measureText(part + character).width > maxWidth) { parts.push(part); part = character; }
+        else part += character;
+      }
+      if (part) parts.push(part);
+      return parts;
+    };
     for (const word of words) {
+      if (ctx.measureText(word).width > maxWidth) {
+        if (line) { lines.push(line); line = ''; }
+        const parts = splitLongWord(word);
+        parts.slice(0, -1).forEach(part => lines.push(part));
+        line = parts[parts.length - 1] || '';
+        continue;
+      }
       const test = line ? `${line} ${word}` : word;
       if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = word; }
       else line = test;
     }
     if (line) lines.push(line);
-    let clipped = lines.slice(0, maxLines);
-    if (lines.length > maxLines && clipped.length) {
-      let last = clipped[clipped.length - 1];
-      while (ctx.measureText(`${last}…`).width > maxWidth && last.length > 4) last = last.slice(0, -1);
-      clipped[clipped.length - 1] = `${last.trim()}…`;
-    }
+    // Never cut copy at the canvas boundary. Long bodies are split into continuation
+    // slides before drawing; this final wrapper also handles an unusual long URL/token.
+    const clipped = lines;
     let remaining = Number.isFinite(revealCount) ? Math.max(0, Math.floor(revealCount)) : Infinity;
     let lastVisible = null;
     clipped.forEach((ln, i) => {
@@ -268,10 +437,10 @@
     }
     const yBase = intro ? 355 : 320; const slide = (1 - fade) * 28; ctx.save(); ctx.globalAlpha = fade; ctx.translate(0, slide);
     const headlineText = scene.headline || '';
-    const bodyText = scene.body || scene.visualDirection || '';
-    const headlineDuration = Math.min(1.65, Math.max(.62, headlineText.length / 31));
-    const bodyDelay = Math.min(headlineDuration + .12, duration * .48);
-    const bodyDuration = Math.min(2.15, Math.max(.65, bodyText.length / 48), Math.max(.5, duration - bodyDelay - .42));
+    const bodyText = scene.body || '';
+    const headlineDuration = scene.headlineTypingDuration || Math.min(2.8, Math.max(.72, headlineText.length / 27));
+    const bodyDelay = scene.bodyDelay ?? (headlineDuration + .24);
+    const bodyDuration = bodyText ? (scene.bodyTypingDuration || Math.min(5, Math.max(.72, bodyText.length / 42))) : 0;
     const headlineProgress = Math.max(0, Math.min(1, localTime / headlineDuration));
     const bodyProgress = Math.max(0, Math.min(1, (localTime - bodyDelay) / bodyDuration));
     const headlineChars = Math.ceil(headlineText.length * headlineProgress);
@@ -281,8 +450,8 @@
     ctx.fillStyle = '#f5f8fc'; ctx.font = `850 ${intro ? 54 : 49}px system-ui, sans-serif`; ctx.letterSpacing = '-1.6px';
     const headlineLines = wrapText(ctx, headlineText, 54, yBase, W - 108, intro ? 68 : 62, 4, headlineChars, titleTyping, globalTime);
     const bodyY = yBase + headlineLines * (intro ? 68 : 62) + 33;
-    ctx.fillStyle = '#bdcbd9'; ctx.font = '500 25px system-ui, sans-serif'; ctx.letterSpacing = '0px';
-    wrapText(ctx, bodyText, 56, bodyY, W - 112, 38, 5, bodyChars, bodyTyping, globalTime + .4);
+    ctx.fillStyle = '#bdcbd9'; ctx.font = '500 23px system-ui, sans-serif'; ctx.letterSpacing = '0px';
+    wrapText(ctx, bodyText, 56, bodyY, W - 112, 34, 8, bodyChars, bodyTyping, globalTime + .4);
     ctx.restore();
     // Lower visual motif reacts to time and audio-cue family.
     const motifY = H - 300; ctx.save(); ctx.globalAlpha = .8;
@@ -357,21 +526,24 @@
     try { mimeType = selectedMimeType(); }
     catch (error) { showMessage(els.renderMessage, error.message, 'error'); return; }
     currentBlob = null;
+    optimizedMp4 = false;
     if (currentUrl) { URL.revokeObjectURL(currentUrl); currentUrl = null; }
     els.renderPanel.hidden = false; els.renderPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     els.resultActions.hidden = true; els.cancelBtn.hidden = false; els.renderBtn.disabled = true; els.renderMessage.textContent = '';
     els.progressBar.style.width = '0%'; els.progressLabel.textContent = '0% complete'; els.timeLabel.textContent = '00:00 / ' + fmtTime(prepared.total); els.renderStatus.textContent = 'Loading available visuals…';
     const canvas = els.canvas; canvas.width = 720; canvas.height = 1280; const ctx = canvas.getContext('2d', { alpha: false });
     const story = prepared.story; const themeName = els.themeSelect.value; const moodName = getAudioMood(story);
-    const renderToken = { running: true, cancelled: false, raf: 0, recorder: null, streams: [], audio: null, wakeLock: null, startedAt: 0, total: prepared.total, images: [] }; renderState = renderToken;
+    const renderToken = { running: true, cancelled: false, raf: 0, recorder: null, streams: [], audio: null, audioCtx: null, wakeLock: null, startedAt: 0, total: prepared.total, images: [] }; renderState = renderToken;
     try {
       renderToken.images = await preloadImages(story);
       if (renderToken.cancelled) return;
-      const canvasStream = canvas.captureStream(24); renderToken.streams.push(canvasStream);
+      const canvasStream = canvas.captureStream(30); renderToken.streams.push(canvasStream);
       // One audio context feeds the recorder, keeping the soundtrack synchronized with the canvas stream.
-      const AudioCtx = window.AudioContext || window.webkitAudioContext; const audioCtx = new AudioCtx();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext; const audioCtx = new AudioCtx(); renderToken.audioCtx = audioCtx;
       const destination = audioCtx.createMediaStreamDestination();
-      const audioEngine = createAudioEngineInContext(audioCtx, moodName, destination); renderToken.audio = audioEngine;
+      const decodedAssets = await decodeAudioAssets(audioCtx);
+      if (renderToken.cancelled) { await audioCtx.close(); return; }
+      const audioEngine = createAudioEngineInContext(audioCtx, moodName, destination, selectedAudioLevels(), decodedAssets); renderToken.audio = audioEngine;
       const combined = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]); renderToken.streams.push(destination.stream, combined);
       const options = { videoBitsPerSecond: 3_800_000, audioBitsPerSecond: 128_000 };
       if (mimeType) options.mimeType = mimeType;
@@ -393,7 +565,7 @@
         els.renderStatus.textContent = 'Video ready'; els.resultActions.hidden = false;
         updateExportActions();
         const nativeMp4 = /mp4/i.test(blob.type);
-        showMessage(els.renderMessage, `Your video is ready as ${nativeMp4 ? 'MP4' : 'WebM'} (${(blob.size / (1024 * 1024)).toFixed(1)} MB). ${nativeMp4 ? 'You can save or share this file.' : 'Convert it to MP4 for better compatibility with social apps.'}`, 'success');
+        showMessage(els.renderMessage, `Your video is ready as ${nativeMp4 ? 'MP4' : 'WebM'} (${(blob.size / (1024 * 1024)).toFixed(1)} MB). ${nativeMp4 ? 'Before uploading, use Optimize MP4 for social apps to normalize frame rate and audio.' : 'Convert it to MP4 for better social-app compatibility.'}`, 'success');
         setShareVisibility(); els.resultActions.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       };
       try { if ('wakeLock' in navigator) renderToken.wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
@@ -427,30 +599,39 @@
       renderToken.running = false; els.renderBtn.disabled = false; els.cancelBtn.hidden = true;
       renderToken.streams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
       if (renderToken.audio) { try { await renderToken.audio.close(); } catch (_) {} }
+      else if (renderToken.audioCtx && renderToken.audioCtx.state !== 'closed') { try { await renderToken.audioCtx.close(); } catch (_) {} }
       showMessage(els.renderMessage, `Could not start the video renderer: ${error.message || error}. Try Chrome on Android and a shorter script.`, 'error');
     }
   }
-  function createAudioEngineInContext(ctx, moodName, destination) {
-    // A clean, musical tech bed: warm sustained harmony + a gentle timed synth-pluck pattern.
-    // The futuristic mood intentionally avoids sweeping filtered noise and pitch-dropping bleeps,
-    // which can sound watery or like a vacuum on small mobile speakers.
-    const master = ctx.createGain(); master.gain.value = .92;
+  function createAudioEngineInContext(ctx, moodName, destination, initialLevels = selectedAudioLevels(), assets = {}) {
+    // Separate buses allow independent live control of music, scene effects and master.
+    // Optional user-supplied audio replaces the matching synthesized layer; the video
+    // and audio still remain entirely local to the browser.
+    const levels = { ...initialLevels };
+    const master = ctx.createGain(); master.gain.value = levels.master;
     const compressor = ctx.createDynamicsCompressor();
-    compressor.threshold.value = -18; compressor.knee.value = 18; compressor.ratio.value = 4.5;
-    compressor.attack.value = .006; compressor.release.value = .26;
-    master.connect(compressor); compressor.connect(destination);
+    compressor.threshold.value = -17; compressor.knee.value = 16; compressor.ratio.value = 4.2;
+    compressor.attack.value = .008; compressor.release.value = .24;
+    const makeup = ctx.createGain(); makeup.gain.value = 1.18;
+    const safetyLimiter = ctx.createDynamicsCompressor();
+    safetyLimiter.threshold.value = -2.5; safetyLimiter.knee.value = 2.5; safetyLimiter.ratio.value = 16;
+    safetyLimiter.attack.value = .003; safetyLimiter.release.value = .16;
+    master.connect(compressor); compressor.connect(makeup); makeup.connect(safetyLimiter); safetyLimiter.connect(destination);
 
-    const musicBus = ctx.createGain(); musicBus.gain.value = moodName === 'futuristic' ? 1.0 : .92; musicBus.connect(master);
-    const sfxBus = ctx.createGain(); sfxBus.gain.value = 1.0; sfxBus.connect(master);
+    const presetMusicGain = moodName === 'futuristic' ? 1.0 : .92;
+    let baseMusicGain = (assets.music ? 1.0 : presetMusicGain) * levels.music;
+    const musicBus = ctx.createGain(); musicBus.gain.value = baseMusicGain; musicBus.connect(master);
+    const sfxBus = ctx.createGain(); sfxBus.gain.value = levels.effects; sfxBus.connect(master);
     const mood = MOODS[moodName] || MOODS.futuristic;
     const oscillators = [];
     let schedulerTimer = null;
     let nextMusicTime = 0;
     let musicStep = 0;
     let futureTranspose = 0;
+    let customMusicSource = null;
 
     // Keep non-futuristic presets as the earlier sustained-pad sound.
-    if (mood.notes.length && moodName !== 'futuristic') {
+    if (!assets.music && mood.notes.length && moodName !== 'futuristic') {
       const filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = mood.filter; filter.Q.value = .55; filter.connect(musicBus);
       ['sine', 'triangle', 'sine'].forEach((type, i) => {
         const osc = ctx.createOscillator(); const gain = ctx.createGain();
@@ -462,12 +643,12 @@
     }
 
     // Futuristic: warm D-major pad with gentle harmonics, without the watery filter sweep.
-    if (moodName === 'futuristic') {
+    if (!assets.music && moodName === 'futuristic') {
       const padFilter = ctx.createBiquadFilter();
       padFilter.type = 'lowpass'; padFilter.frequency.value = 2850; padFilter.Q.value = .22; padFilter.connect(musicBus);
       const padNotes = [146.83, 185.00, 220.00, 293.66]; // D, F#, A, D
       const padTypes = ['sine', 'triangle', 'sine', 'sine'];
-      const padLevels = [.040, .021, .024, .010];
+      const padLevels = [.048, .025, .029, .013];
       padNotes.forEach((frequency, i) => {
         const osc = ctx.createOscillator(); const gain = ctx.createGain();
         osc.type = padTypes[i]; osc.frequency.value = frequency;
@@ -511,18 +692,53 @@
       overtone.connect(overtoneGain); overtoneGain.connect(musicBus);
       osc.start(when); overtone.start(when); osc.stop(when + .42); overtone.stop(when + .27);
     }
+    function duckMusic(when, strength = .68) {
+      if (moodName === 'none' && !assets.music) return;
+      const param = musicBus.gain;
+      try {
+        param.cancelScheduledValues(when);
+        param.setValueAtTime(Math.max(.001, param.value), when);
+        param.linearRampToValueAtTime(baseMusicGain * strength, when + .045);
+        param.setValueAtTime(baseMusicGain * strength, when + .20);
+        param.linearRampToValueAtTime(baseMusicGain, when + .72);
+      } catch (_) {}
+    }
+    function playBassPulse(when, level) {
+      // A very restrained warm pulse adds rhythm on phones without relying on sub-bass alone.
+      const low = ctx.createOscillator(), harmonic = ctx.createOscillator();
+      const lowGain = ctx.createGain(), harmonicGain = ctx.createGain();
+      low.type = 'sine'; low.frequency.setValueAtTime(73.42, when);
+      harmonic.type = 'triangle'; harmonic.frequency.setValueAtTime(146.83, when);
+      lowGain.gain.setValueAtTime(.0001, when);
+      lowGain.gain.linearRampToValueAtTime(level * .42, when + .018);
+      lowGain.gain.exponentialRampToValueAtTime(.0001, when + .25);
+      harmonicGain.gain.setValueAtTime(.0001, when);
+      harmonicGain.gain.linearRampToValueAtTime(level * .32, when + .014);
+      harmonicGain.gain.exponentialRampToValueAtTime(.0001, when + .18);
+      low.connect(lowGain); lowGain.connect(musicBus); harmonic.connect(harmonicGain); harmonicGain.connect(musicBus);
+      low.start(when); harmonic.start(when); low.stop(when + .27); harmonic.stop(when + .2);
+    }
     function scheduleFutureMusic() {
-      if (moodName !== 'futuristic' || ctx.state === 'closed') return;
+      if (moodName !== 'futuristic' || assets.music || ctx.state === 'closed') return;
       const horizon = ctx.currentTime + .16;
       while (nextMusicTime < horizon) {
         const note = futurePattern[musicStep % futurePattern.length];
-        if (note) playFutureNote(note * Math.pow(2, futureTranspose / 12), nextMusicTime, musicStep % futurePattern.length === 0 ? .145 : .115);
+        if (note) playFutureNote(note * Math.pow(2, futureTranspose / 12), nextMusicTime, musicStep % futurePattern.length === 0 ? .16 : .128);
+        if (musicStep % 2 === 0) playBassPulse(nextMusicTime, musicStep % 4 === 0 ? .045 : .032);
         nextMusicTime += .46;
         musicStep++;
       }
     }
     function start() {
-      if (moodName !== 'futuristic' || schedulerTimer !== null) return;
+      if (customMusicSource || schedulerTimer !== null) return;
+      if (assets.music) {
+        customMusicSource = ctx.createBufferSource();
+        customMusicSource.buffer = assets.music;
+        customMusicSource.loop = true;
+        customMusicSource.connect(musicBus);
+        customMusicSource.start(ctx.currentTime + .04);
+      }
+      if (moodName !== 'futuristic' || assets.music) return;
       nextMusicTime = ctx.currentTime + .06;
       scheduleFutureMusic();
       schedulerTimer = setInterval(scheduleFutureMusic, 45);
@@ -531,7 +747,24 @@
     function playCue(cueName, when) {
       // Leave the scene-change whoosh intact: this was the effect that sounded best in testing.
       const cue = normalizeCue(cueName); if (cue === 'soft') return;
+      if (assets.sfx) {
+        duckMusic(when, cue === 'impact' ? .58 : .74);
+        const source = ctx.createBufferSource();
+        const envelope = ctx.createGain();
+        const clipLength = Math.max(.12, Math.min(assets.sfx.duration, cue === 'impact' ? 1.05 : 1.35));
+        source.buffer = assets.sfx;
+        source.playbackRate.setValueAtTime(cue === 'impact' ? .92 : 1.0, when);
+        envelope.gain.setValueAtTime(.0001, when);
+        envelope.gain.linearRampToValueAtTime(cue === 'impact' ? .9 : .75, when + Math.min(.035, clipLength * .15));
+        envelope.gain.setValueAtTime(cue === 'impact' ? .9 : .75, when + clipLength * .66);
+        envelope.gain.exponentialRampToValueAtTime(.0001, when + clipLength);
+        source.connect(envelope); envelope.connect(sfxBus);
+        source.start(when, 0, clipLength);
+        source.stop(when + clipLength + .02);
+        return;
+      }
       if (cue === 'impact') {
+        duckMusic(when, .54);
         const osc = ctx.createOscillator(), gain = ctx.createGain(), filter = ctx.createBiquadFilter();
         osc.type = 'sine'; osc.frequency.setValueAtTime(125, when); osc.frequency.exponentialRampToValueAtTime(48, when + .36);
         filter.type = 'lowpass'; filter.frequency.value = 260;
@@ -544,24 +777,52 @@
         clickGain.gain.setValueAtTime(.16 * mood.cue, when); clickGain.gain.exponentialRampToValueAtTime(.0001, when + .15);
         click.connect(clickFilter); clickFilter.connect(clickGain); clickGain.connect(sfxBus); click.start(when); click.stop(when + .16);
       } else if (cue === 'whoosh' || cue === 'riser') {
-        const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * .72), ctx.sampleRate); const values = buffer.getChannelData(0);
-        for (let i = 0; i < values.length; i++) values[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / values.length);
-        const source = ctx.createBufferSource(), filter = ctx.createBiquadFilter(), gain = ctx.createGain(); source.buffer = buffer;
-        filter.type = 'bandpass'; filter.frequency.setValueAtTime(430, when); filter.frequency.exponentialRampToValueAtTime(cue === 'riser' ? 4200 : 3000, when + .58); filter.Q.value = .55;
-        gain.gain.setValueAtTime(.0001, when); gain.gain.linearRampToValueAtTime(.19 * mood.cue, when + .22); gain.gain.exponentialRampToValueAtTime(.0001, when + .7);
-        source.connect(filter); filter.connect(gain); gain.connect(sfxBus); source.start(when); source.stop(when + .73);
+        duckMusic(when, cue === 'riser' ? .56 : .70);
+        const sweepDuration = cue === 'riser' ? .92 : .66;
+        const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * sweepDuration), ctx.sampleRate); const values = buffer.getChannelData(0);
+        for (let i = 0; i < values.length; i++) {
+          const t = i / values.length;
+          const envelope = Math.pow(Math.sin(Math.PI * t), 1.6);
+          values[i] = (Math.random() * 2 - 1) * envelope;
+        }
+        const source = ctx.createBufferSource(), filter = ctx.createBiquadFilter(), noiseGain = ctx.createGain(); source.buffer = buffer;
+        filter.type = 'bandpass'; filter.frequency.setValueAtTime(360, when); filter.frequency.exponentialRampToValueAtTime(cue === 'riser' ? 2500 : 1850, when + sweepDuration * .78); filter.Q.value = 1.05;
+        noiseGain.gain.setValueAtTime(.0001, when); noiseGain.gain.linearRampToValueAtTime((cue === 'riser' ? .105 : .078) * mood.cue, when + sweepDuration * .34); noiseGain.gain.exponentialRampToValueAtTime(.0001, when + sweepDuration);
+        source.connect(filter); filter.connect(noiseGain); noiseGain.connect(sfxBus); source.start(when); source.stop(when + sweepDuration + .02);
+        // A smooth tonal rise gives the transition a cleaner digital identity, so it feels less like a vacuum/water-filter noise.
+        const tone = ctx.createOscillator(), toneFilter = ctx.createBiquadFilter(), toneGain = ctx.createGain();
+        tone.type = 'triangle'; tone.frequency.setValueAtTime(cue === 'riser' ? 165 : 220, when); tone.frequency.exponentialRampToValueAtTime(cue === 'riser' ? 587.33 : 440, when + sweepDuration * .82);
+        toneFilter.type = 'lowpass'; toneFilter.frequency.setValueAtTime(1500, when); toneFilter.Q.value = .25;
+        toneGain.gain.setValueAtTime(.0001, when); toneGain.gain.linearRampToValueAtTime((cue === 'riser' ? .07 : .052) * mood.cue, when + .12); toneGain.gain.exponentialRampToValueAtTime(.0001, when + sweepDuration * .94);
+        tone.connect(toneFilter); toneFilter.connect(toneGain); toneGain.connect(sfxBus); tone.start(when); tone.stop(when + sweepDuration + .02);
       } else {
-        const osc = ctx.createOscillator(), gain = ctx.createGain(); osc.type = 'triangle';
-        osc.frequency.setValueAtTime(740, when); osc.frequency.exponentialRampToValueAtTime(360, when + .13);
-        gain.gain.setValueAtTime(.0001, when); gain.gain.exponentialRampToValueAtTime(.13 * mood.cue, when + .01); gain.gain.exponentialRampToValueAtTime(.0001, when + .24);
-        osc.connect(gain); gain.connect(sfxBus); osc.start(when); osc.stop(when + .26);
+        // Clean two-note digital marker instead of a watery downward blip.
+        duckMusic(when, .72);
+        [[660, 0], [990, .075]].forEach(([frequency, offset], idx) => {
+          const osc = ctx.createOscillator(), gain = ctx.createGain();
+          osc.type = 'sine'; osc.frequency.setValueAtTime(frequency, when + offset);
+          gain.gain.setValueAtTime(.0001, when + offset);
+          gain.gain.linearRampToValueAtTime((idx ? .052 : .065) * mood.cue, when + offset + .012);
+          gain.gain.exponentialRampToValueAtTime(.0001, when + offset + .16);
+          osc.connect(gain); gain.connect(sfxBus); osc.start(when + offset); osc.stop(when + offset + .18);
+        });
       }
     }
+    function setLevels(nextLevels) {
+      levels.music = clampNumber(Number(nextLevels.music ?? levels.music), 0, 1.5);
+      levels.effects = clampNumber(Number(nextLevels.effects ?? levels.effects), 0, 1.5);
+      levels.master = clampNumber(Number(nextLevels.master ?? levels.master), .5, 1.5);
+      baseMusicGain = (assets.music ? 1.0 : presetMusicGain) * levels.music;
+      musicBus.gain.setTargetAtTime(baseMusicGain, ctx.currentTime, .035);
+      sfxBus.gain.setTargetAtTime(levels.effects, ctx.currentTime, .035);
+      master.gain.setTargetAtTime(levels.master, ctx.currentTime, .035);
+    }
     return {
-      ctx, chord, playCue, start,
+      ctx, chord, playCue, start, setLevels,
       close: () => {
         if (schedulerTimer !== null) clearInterval(schedulerTimer);
         oscillators.forEach(o => { try { o.osc.stop(); } catch (_) {} });
+        try { if (customMusicSource) customMusicSource.stop(); } catch (_) {}
         return ctx.close();
       }
     };
@@ -571,22 +832,28 @@
     soundPreviewTimeout = null;
     const engine = soundPreviewEngine; soundPreviewEngine = null;
     if (engine) { try { engine.close().catch(() => {}); } catch (_) {} }
-    if (els.soundPreviewBtn) els.soundPreviewBtn.textContent = '▶ Preview improved futuristic soundtrack + transition';
+    if (els.soundPreviewBtn) els.soundPreviewBtn.textContent = '▶ Preview current mix + transitions';
   }
   async function previewSoundDesign() {
     if (soundPreviewEngine) { stopSoundPreview(); return; }
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) { toast('Audio preview is not supported in this browser.'); return; }
+    let previewCtx = null;
     try {
-      const ctx = new AudioCtx(); await ctx.resume();
-      const engine = createAudioEngineInContext(ctx, 'futuristic', ctx.destination);
+      const ctx = new AudioCtx(); previewCtx = ctx;
+      const decodedAssets = await decodeAudioAssets(ctx);
+      await ctx.resume();
+      const engine = createAudioEngineInContext(ctx, getAudioMood({ musicMood: 'futuristic' }), ctx.destination, selectedAudioLevels(), decodedAssets);
       soundPreviewEngine = engine; engine.start();
       const now = ctx.currentTime + .035;
       engine.chord(0, now); engine.playCue('impact', now + .08); engine.playCue('whoosh', now + 2.45);
+      engine.setLevels(selectedAudioLevels());
       els.soundPreviewBtn.textContent = '■ Stop sound preview';
       soundPreviewTimeout = setTimeout(stopSoundPreview, 6500);
     } catch (error) {
-      stopSoundPreview(); console.error(error); toast('Could not play the audio preview. Tap again or check your phone volume.');
+      stopSoundPreview();
+      if (previewCtx && previewCtx.state !== 'closed') { try { await previewCtx.close(); } catch (_) {} }
+      console.error(error); toast(error?.message || 'Could not play the audio preview. Tap again or check your phone volume.');
     }
   }
   function cancelRender() {
@@ -597,6 +864,7 @@
     else {
       renderState.streams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
       if (renderState.audio) renderState.audio.close().catch(() => {});
+      else if (renderState.audioCtx && renderState.audioCtx.state !== 'closed') renderState.audioCtx.close().catch(() => {});
       els.renderBtn.disabled = false; els.cancelBtn.hidden = true;
       showMessage(els.renderMessage, 'Render cancelled. Your script is still here.');
     }
@@ -607,17 +875,23 @@
   function videoExtension(blob = currentBlob) { return blob && /mp4/i.test(blob.type) ? 'mp4' : 'webm'; }
   function updateExportActions() {
     const isMp4 = videoExtension() === 'mp4';
-    els.mp4Btn.hidden = isMp4;
+    // Even native/browser-generated MP4s can have variable timestamps. Keep a normalizing
+    // action available until we've re-encoded the file to constant 30 fps H.264 + AAC.
+    els.mp4Btn.hidden = optimizedMp4;
+    const convertLabel = els.mp4Btn.querySelector('span');
+    if (convertLabel) convertLabel.textContent = isMp4 ? 'Optimize MP4 for social apps' : 'Convert to MP4 for social apps';
     els.downloadBtn.className = isMp4 ? 'primary-button' : 'secondary-button';
     const label = els.downloadBtn.querySelector('span');
     if (label) label.textContent = isMp4 ? 'Save MP4 to phone' : 'Save original WebM';
     const arrow = els.downloadBtn.querySelector('.button-arrow');
     if (arrow) arrow.textContent = '↓';
-    els.shareBtn.textContent = 'Share MP4 file';
+    els.shareBtn.textContent = `Share ${isMp4 ? 'MP4' : 'video'} file`;
     if (els.exportHint) {
-      els.exportHint.textContent = isMp4
-        ? 'MP4 (H.264 video + AAC audio) is the most compatible export for social platforms. Use Share MP4 where supported, or save the file and select it inside WhatsApp, X or YouTube. Nothing is uploaded by this app.'
-        : 'This browser recorded WebM. Tap “Convert to MP4 for social apps” for a real format conversion—not just a filename change. The first conversion downloads a large converter and may take a few minutes on a phone. Your video stays on this device.';
+      els.exportHint.textContent = optimizedMp4
+        ? 'Social-ready export: constant-frame-rate 30 fps H.264 video + AAC audio. Save it to your phone, or use Share where file sharing is supported. This app does not upload anything.'
+        : isMp4
+          ? 'This browser recorded MP4, but its frame timing can still confuse social-app previews. Tap “Optimize MP4 for social apps” to normalize it to constant 30 fps H.264 + AAC.'
+          : 'This browser recorded WebM. Convert it to constant 30 fps H.264 video + AAC audio for a more compatible social export. The first conversion downloads a converter; your video stays on this device.';
     }
   }
   function downloadVideo() {
@@ -726,6 +1000,24 @@
     }
     throw new Error(`The MP4 engine could not start. ${lastError?.message || 'The browser may have blocked the converter files.'}`);
   }
+  function readVideoDuration(blob) {
+    return new Promise(resolve => {
+      const url = URL.createObjectURL(blob);
+      const video = document.createElement('video');
+      video.preload = 'metadata'; video.muted = true; video.playsInline = true;
+      let settled = false;
+      const timeout = setTimeout(() => finish(NaN), 10000);
+      const finish = (duration) => {
+        if (settled) return;
+        settled = true; clearTimeout(timeout);
+        video.onloadedmetadata = null; video.onerror = null;
+        video.removeAttribute('src'); video.load(); URL.revokeObjectURL(url); resolve(duration);
+      };
+      video.onloadedmetadata = () => finish(Number.isFinite(video.duration) ? video.duration : NaN);
+      video.onerror = () => finish(NaN);
+      video.src = url;
+    });
+  }
   async function convertToMp4() {
     // Never silently return: explain the state, then visibly update the status before loading WASM.
     if (!currentBlob) {
@@ -733,8 +1025,8 @@
       toast('Render a video before converting.');
       return;
     }
-    if (videoExtension() === 'mp4') {
-      showMessage(els.renderMessage, 'This video is already MP4. Use Save MP4 to phone or Share MP4 video.', 'success');
+    if (optimizedMp4) {
+      showMessage(els.renderMessage, 'This video has already been normalized to constant-frame-rate H.264 MP4. Save it or share it.', 'success');
       return;
     }
     if (currentBlob.size > 150 * 1024 * 1024) {
@@ -754,14 +1046,16 @@
       // Yield once so status text paints before starting large downloads / WASM initialization.
       await new Promise(resolve => setTimeout(resolve, 60));
       const { ffmpeg, fetchFile } = await getMp4Converter();
-      try { ffmpeg.FS('unlink', 'input.webm'); } catch (_) {}
-      try { ffmpeg.FS('unlink', 'output.mp4'); } catch (_) {}
       const sourceBlob = currentBlob;
+      const inputName = videoExtension(sourceBlob) === 'mp4' ? 'input.mp4' : 'input.webm';
+      try { ffmpeg.FS('unlink', 'input.webm'); } catch (_) {}
+      try { ffmpeg.FS('unlink', 'input.mp4'); } catch (_) {}
+      try { ffmpeg.FS('unlink', 'output.mp4'); } catch (_) {}
       showMessage(els.renderMessage, 'Converter loaded. Preparing your video for MP4 encoding…', '');
-      await ffmpeg.FS('writeFile', 'input.webm', await fetchFile(sourceBlob));
+      await ffmpeg.FS('writeFile', inputName, await fetchFile(sourceBlob));
       if (oldLabel) oldLabel.textContent = 'Converting video…';
       els.renderStatus.textContent = 'Converting video to MP4…';
-      showMessage(els.renderMessage, 'Encoding H.264 video and AAC audio. This can take a few minutes on a phone; keep the app in the foreground.', '');
+      showMessage(els.renderMessage, 'Normalizing timestamps and encoding constant-frame-rate H.264 video + AAC audio for social apps. Keep the app in the foreground.', '');
       try {
         ffmpeg.setProgress(({ ratio }) => {
           if (Number.isFinite(ratio)) {
@@ -772,10 +1066,23 @@
           }
         });
       } catch (_) {}
+      // Browsers can write WebM/MP4 with variable or odd timestamps. Reset the start
+      // timestamp, normalize to constant 30 fps, and export a common H.264/AAC profile
+      // so social apps don't misread the timeline as a very short clip.
+      const expectedSeconds = Math.max(1, Number(prepared?.total) || 1);
       await ffmpeg.run(
-        '-i', 'input.webm',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '27', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
+        '-fflags', '+genpts',
+        '-i', inputName,
+        '-map', '0:v:0', '-map', '0:a:0',
+        '-vf', 'setpts=N/(30*TB),fps=30,setpts=N/(30*TB)',
+        '-r', '30', '-vsync', '1',
+        '-t', expectedSeconds.toFixed(3),
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
+        '-profile:v', 'baseline', '-level:v', '3.2',
+        '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+        '-af', 'aresample=async=1:first_pts=0,asetpts=N/SR/TB',
+        '-avoid_negative_ts', 'make_zero', '-video_track_timescale', '90000', '-movflags', '+faststart',
+        '-metadata', 'title=WireUnWired Video',
         'output.mp4'
       );
       const fileData = ffmpeg.FS('readFile', 'output.mp4');
@@ -783,18 +1090,28 @@
       const safeBytes = new Uint8Array(fileData);
       const mp4Blob = new Blob([safeBytes], { type: 'video/mp4' });
       try { ffmpeg.FS('unlink', 'input.webm'); } catch (_) {}
+      try { ffmpeg.FS('unlink', 'input.mp4'); } catch (_) {}
       try { ffmpeg.FS('unlink', 'output.mp4'); } catch (_) {}
+      const convertedDuration = await readVideoDuration(mp4Blob);
+      const expectedDuration = Number(prepared?.total) || 0;
+      const durationTolerance = Math.max(2.5, expectedDuration * 0.04);
+      if (!Number.isFinite(convertedDuration) || convertedDuration <= 0) {
+        throw new Error('The browser could not verify the converted MP4 duration. The original video has been kept; try again in Chrome or save the original file.');
+      }
+      if (expectedDuration > 0 && Math.abs(convertedDuration - expectedDuration) > durationTolerance) {
+        throw new Error(`MP4 duration validation failed: expected about ${Math.ceil(expectedDuration)} seconds, but the converted file reports ${convertedDuration.toFixed(1)} seconds. The app rejected the export instead of marking a short or incomplete video as ready. The original video has been kept.`);
+      }
       if (currentUrl) URL.revokeObjectURL(currentUrl);
-      currentBlob = mp4Blob; currentUrl = URL.createObjectURL(mp4Blob);
+      currentBlob = mp4Blob; currentUrl = URL.createObjectURL(mp4Blob); optimizedMp4 = true;
       updateExportActions(); setShareVisibility();
       els.progressBar.style.width = '100%';
       els.progressLabel.textContent = 'MP4 ready';
-      showMessage(els.renderMessage, `MP4 conversion complete (${(mp4Blob.size / (1024 * 1024)).toFixed(1)} MB). Save it or tap Share MP4 video. X and YouTube may still require uploading it from inside their apps.`, 'success');
+      showMessage(els.renderMessage, `MP4 conversion complete (${(mp4Blob.size / (1024 * 1024)).toFixed(1)} MB${Number.isFinite(convertedDuration) ? ` · ${Math.round(convertedDuration)} sec` : ''}). Constant 30 fps H.264 + AAC is ready to save or share. X and YouTube may still require uploading it from inside their apps.`, 'success');
       els.renderStatus.textContent = 'MP4 ready';
     } catch (error) {
       console.error('MP4 conversion failed', error);
       const detail = error && error.message ? ` Details: ${error.message}` : '';
-      showMessage(els.renderMessage, `MP4 conversion did not complete.${detail} Your original WebM is still available. Try again with a stable connection, or save the WebM and use the destination app's uploader.`, 'error');
+      showMessage(els.renderMessage, `MP4 conversion did not complete.${detail} Your original source video is still available. Retry on a stable connection, or save the original and upload it from the destination app.`, 'error');
       els.renderStatus.textContent = 'MP4 conversion failed';
       els.progressLabel.textContent = 'Conversion failed';
     } finally {
@@ -813,24 +1130,37 @@
     try {
       const story = parseInput(els.input.value);
       const total = story.scenes.reduce((sum, s) => sum + s.duration, 0);
-      if (total > 90) throw new Error('Keep the total scene duration to 90 seconds or less.');
-      if (story.scenes.length > 8) showMessage(els.inputMessage, 'Using the first 10 scenes can make the result busy. For best pacing, use 4–6 scenes.', '');
+      if (total > 360) throw new Error('This script exceeds the six-minute local-rendering limit. Split it into two videos.');
+      if (story.scenes.length > 8) showMessage(els.inputMessage, `This story needs ${story.scenes.length} slides after timing/splitting. Review the sequence carefully; no text was dropped. For a tighter video, shorten copy rather than reducing reading time.`, '');
       prepared = { story, total };
       renderSceneCards(story); els.previewPanel.hidden = false; els.renderPanel.hidden = true;
-      if (!els.inputMessage.textContent.startsWith('Using the first 10')) showMessage(els.inputMessage, `Ready: ${story.scenes.length} slides · about ${Math.round(total)} seconds. Review them below, then render.`, 'success');
+      if (!els.inputMessage.textContent.startsWith('This story needs')) showMessage(els.inputMessage, `Ready: ${story.scenes.length} slides · about ${Math.ceil(total)} seconds. Review them below, then render.`, 'success');
       els.previewPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) { showMessage(els.inputMessage, error.message, 'error'); }
   }
   els.input.addEventListener('input', updateCharCount);
   els.sampleBtn.addEventListener('click', loadSample);
   els.prepareBtn.addEventListener('click', prepare);
+  if (els.readerPaceSelect) els.readerPaceSelect.addEventListener('change', () => { if (prepared) showMessage(els.inputMessage, 'Reading pace changed. Tap Prepare video again to recalculate scene timing.', ''); });
+  updateAudioLevelLabels();
+  [els.musicLevel, els.effectsLevel, els.masterLevel].filter(Boolean).forEach(input => {
+    input.addEventListener('input', () => {
+      updateAudioLevelLabels();
+      const activeAudioEngine = soundPreviewEngine || (renderState?.running ? renderState.audio : null);
+      if (activeAudioEngine && typeof activeAudioEngine.setLevels === 'function') activeAudioEngine.setLevels(selectedAudioLevels());
+    });
+  });
+  if (els.musicFile) els.musicFile.addEventListener('change', event => readAudioAssetFile('music', event.target.files?.[0] || null));
+  if (els.sfxFile) els.sfxFile.addEventListener('change', event => readAudioAssetFile('sfx', event.target.files?.[0] || null));
+  if (els.clearMusicFileBtn) els.clearMusicFileBtn.addEventListener('click', () => { audioAssetFiles.music = null; if (els.musicFile) els.musicFile.value = ''; updateAudioAssetLabel('music'); stopSoundPreview(); toast('Using generated background music.'); });
+  if (els.clearSfxFileBtn) els.clearSfxFileBtn.addEventListener('click', () => { audioAssetFiles.sfx = null; if (els.sfxFile) els.sfxFile.value = ''; updateAudioAssetLabel('sfx'); stopSoundPreview(); toast('Using generated sound effects.'); });
   els.soundPreviewBtn.addEventListener('click', previewSoundDesign);
   els.renderBtn.addEventListener('click', startRender);
   els.cancelBtn.addEventListener('click', cancelRender);
   els.mp4Btn.addEventListener('click', convertToMp4);
   els.downloadBtn.addEventListener('click', downloadVideo);
   els.shareBtn.addEventListener('click', shareVideo);
-  els.newVideoBtn.addEventListener('click', () => { cancelRender(); prepared = null; currentBlob = null; originalBlob = null; if (currentUrl) URL.revokeObjectURL(currentUrl); currentUrl = null; els.renderPanel.hidden = true; els.previewPanel.hidden = true; els.input.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  els.newVideoBtn.addEventListener('click', () => { cancelRender(); prepared = null; currentBlob = null; originalBlob = null; optimizedMp4 = false; if (currentUrl) URL.revokeObjectURL(currentUrl); currentUrl = null; els.renderPanel.hidden = true; els.previewPanel.hidden = true; els.input.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
   window.addEventListener('pagehide', stopSoundPreview);
   window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); deferredInstallPrompt = event; els.installBtn.hidden = false; });
   els.installBtn.addEventListener('click', async () => {
